@@ -226,14 +226,14 @@ onMounted(async () => {
 }
 .github-link {
   font-size: 13px;
-  color: #409eff;
+  color: #f7931e;
   text-decoration: none;
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
 .description {
-  color: #606266;
+  color: #d0d0e0;
   line-height: 1.6;
   margin-bottom: 16px;
 }
@@ -246,11 +246,11 @@ onMounted(async () => {
 .stat-num {
   font-size: 24px;
   font-weight: 700;
-  color: #303133;
+  color: #f7931e;
 }
 .stat-lbl {
   font-size: 13px;
-  color: #909399;
+  color: #c0c0d0;
   margin-top: 4px;
 }
 .topics-section {
@@ -258,7 +258,7 @@ onMounted(async () => {
 }
 .topics-section h4 {
   margin-bottom: 8px;
-  color: #303133;
+  color: #e0e0e0;
 }
 .section-title {
   font-weight: 600;
@@ -272,11 +272,11 @@ onMounted(async () => {
 .commit-sha {
   font-family: monospace;
   font-size: 12px;
-  color: #909399;
+  color: #a0a0b8;
 }
 .commit-message {
   margin-top: 4px;
-  color: #606266;
+  color: #d0d0e0;
   font-size: 14px;
 }
 .commit-stats {
@@ -299,15 +299,16 @@ onMounted(async () => {
   align-items: center;
   gap: 10px;
   padding: 10px 0;
-  border-bottom: 1px solid #f5f5f5;
+  border-bottom: 1px solid #2a2a4a;
 }
 .contributor-name {
   font-weight: 500;
   font-size: 14px;
+  color: #e0e0e0;
 }
 .contributor-count {
   font-size: 12px;
-  color: #909399;
+  color: #a0a0b8;
   margin-top: 2px;
 }
 .quick-nav {

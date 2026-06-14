@@ -7,31 +7,32 @@
 
     <el-card shadow="never" class="search-card">
       <div class="search-input-area">
-        <el-input
-          v-model="query"
-          size="large"
-          placeholder="输入自然语言描述您想找的项目..."
-          clearable
-          @keyup.enter="doSearch"
-        >
-          <template #prepend>
-            <el-select v-model="topK" style="width: 120px">
-              <el-option :value="5" label="Top 5" />
-              <el-option :value="10" label="Top 10" />
-              <el-option :value="20" label="Top 20" />
-            </el-select>
-          </template>
-          <template #append>
-            <el-button
-              type="primary"
-              :loading="searching"
-              @click="doSearch"
-              :icon="Search"
-            >
-              检索
-            </el-button>
-          </template>
-        </el-input>
+        <div class="search-row">
+          <el-input
+            v-model="query"
+            size="large"
+            placeholder="输入自然语言描述您想找的项目..."
+            clearable
+            @keyup.enter="doSearch"
+            class="search-input"
+          >
+            <template #append>
+              <el-button
+                type="primary"
+                :loading="searching"
+                @click="doSearch"
+                :icon="Search"
+              >
+                检索
+              </el-button>
+            </template>
+          </el-input>
+          <el-radio-group v-model="topK" size="default" class="topk-radio">
+            <el-radio-button :value="5">Top 5</el-radio-button>
+            <el-radio-button :value="10">Top 10</el-radio-button>
+            <el-radio-button :value="20">Top 20</el-radio-button>
+          </el-radio-group>
+        </div>
       </div>
 
       <div class="quick-tags">
@@ -165,14 +166,42 @@ async function doSearch() {
 }
 .page-header h2 {
   font-size: 24px;
-  color: #303133;
+  color: #e0e0e0;
 }
 .page-header p {
-  color: #909399;
+  color: #c0c0d0;
   margin-top: 4px;
 }
 .search-input-area {
   max-width: 800px;
+}
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.search-input :deep(.el-input-group__append) {
+  background: #f7931e;
+}
+.search-input :deep(.el-input-group__append .el-button) {
+  color: #fff !important;
+}
+.search-input :deep(.el-input-group__append .el-icon) {
+  color: #fff !important;
+}
+.topk-radio {
+  flex-shrink: 0;
+}
+.topk-radio :deep(.el-radio-button__inner) {
+  background: #1e1e36;
+  border-color: #2a2a4a;
+  color: #c0c0d0;
+}
+.topk-radio :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
+  background: #f7931e;
+  border-color: #f7931e;
+  color: #fff;
+  box-shadow: none;
 }
 .quick-tags {
   margin-top: 16px;
@@ -183,7 +212,7 @@ async function doSearch() {
 }
 .tag-label {
   font-size: 13px;
-  color: #909399;
+  color: #a0a0b8;
 }
 .quick-tag {
   cursor: pointer;
@@ -212,14 +241,15 @@ async function doSearch() {
   align-items: center;
   gap: 16px;
   padding: 16px;
-  border: 1px solid #ebeef5;
+  border: 1px solid #2a2a4a;
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s;
+  background: #1e1e36;
 }
 .search-result-item:hover {
-  border-color: #409eff;
-  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.15);
+  border-color: #f7931e;
+  box-shadow: 0 2px 8px rgba(247,147,30,0.15);
 }
 .result-rank {
   width: 36px;
@@ -233,7 +263,7 @@ async function doSearch() {
   flex-shrink: 0;
 }
 .result-rank .top3 {
-  color: #409eff;
+  color: #f7931e;
 }
 .result-content {
   flex: 1;

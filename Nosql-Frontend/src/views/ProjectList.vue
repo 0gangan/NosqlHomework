@@ -206,10 +206,10 @@ onMounted(() => {
 }
 .page-header h2 {
   font-size: 24px;
-  color: #303133;
+  color: #e0e0e0;
 }
 .page-header p {
-  color: #909399;
+  color: #c0c0d0;
   margin-top: 4px;
 }
 .filter-card :deep(.el-card__body) {
@@ -226,16 +226,16 @@ onMounted(() => {
 }
 .project-name {
   font-weight: 500;
-  color: #303133;
+  color: #e0e0e0;
 }
 .text-muted {
-  color: #909399;
+  color: #a0a0b8;
   font-size: 13px;
 }
 :deep(.clickable-row) {
   cursor: pointer;
 }
 :deep(.clickable-row:hover) {
-  background: #ecf5ff !important;
+  background: rgba(247,147,30,0.08) !important;
 }
 </style>
