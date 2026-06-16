@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- 引入 Spring Boot 默认日志配置（颜色、pattern 等） -->
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <!-- 覆盖 ConsoleAppender 的 encoder，强制 UTF-8 + 保留彩色 -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <charset>UTF-8</charset>
+            <pattern>${CONSOLE_LOG_PATTERN}</pattern>
+        </encoder>
+    </appender>
+
+    <!-- 你自己的业务代码 DEBUG 级别 -->
+    <logger name="com.example.Nosql_Homework" level="DEBUG" />
+
+    <!-- 框架只打 WARN 以上 -->
+    <root level="WARN">
+        <appender-ref ref="CONSOLE" />
+    </root>
+</configuration>
+

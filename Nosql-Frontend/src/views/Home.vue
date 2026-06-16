@@ -82,10 +82,10 @@ const topProjects = ref([])
 const langChartRef = ref(null)
 
 const stats = ref([
-  { label: '开源项目', value: '-', icon: 'FolderOpened', color: '#e6f7ff' },
-  { label: '编程语言', value: '-', icon: 'Monitor', color: '#fff7e6' },
-  { label: '组织/用户', value: '-', icon: 'User', color: '#f6ffed' },
-  { label: '检索记录', value: '-', icon: 'Search', color: '#fff0f6' }
+  { label: '开源项目', value: '-', icon: 'FolderOpened', color: 'rgba(247,147,30,0.12)' },
+  { label: '编程语言', value: '-', icon: 'Monitor', color: 'rgba(247,147,30,0.12)' },
+  { label: '组织/用户', value: '-', icon: 'User', color: 'rgba(247,147,30,0.12)' },
+  { label: '检索记录', value: '-', icon: 'Search', color: 'rgba(247,147,30,0.12)' }
 ])
 
 // 图表使用的语言列表 — 仅作为查询参数传后端，实际数量来自 API 返回值
@@ -167,7 +167,7 @@ function renderLangChart() {
         radius: ['45%', '75%'],
         center: ['50%', '50%'],
         avoidLabelOverlap: false,
-        itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+        itemStyle: { borderRadius: 6, borderColor: '#1e1e36', borderWidth: 2 },
         label: { show: true, formatter: '{b}\n{d}%' },
         data: data
       }]
@@ -186,19 +186,40 @@ onMounted(() => {
 .hero-section {
   text-align: center;
   padding: 48px 0;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #1a1a2e 0%, #252542 40%, #2d1f0e 100%);
   border-radius: 12px;
-  color: #fff;
+  border: 1px solid #3a3020;
+  color: #e0e0e0;
   margin-bottom: 24px;
 }
 .hero-section h1 {
   font-size: 32px;
   margin-bottom: 12px;
+  color: #f7931e;
 }
 .hero-section p {
   font-size: 16px;
-  opacity: 0.9;
+  opacity: 0.8;
   margin-bottom: 24px;
+  color: #b0b0c0;
+}
+.hero-actions :deep(.el-button--primary) {
+  background: #f7931e;
+  border-color: #f7931e;
+}
+.hero-actions :deep(.el-button--primary:hover) {
+  background: #e07d0e;
+  border-color: #e07d0e;
+}
+.hero-actions :deep(.el-button:not(.el-button--primary)) {
+  background: rgba(255,255,255,0.1);
+  border-color: rgba(255,255,255,0.2);
+  color: #e0e0e0;
+}
+.hero-actions :deep(.el-button:not(.el-button--primary):hover) {
+  background: rgba(255,255,255,0.2);
+  border-color: #f7931e;
+  color: #f7931e;
 }
 .hero-actions {
   display: flex;
@@ -209,15 +230,15 @@ onMounted(() => {
   margin-top: 0;
 }
 .stat-card {
-  display: flex;
-  align-items: center;
-  gap: 16px;
+  background: #1e1e36;
+  border: 1px solid #2a2a4a;
 }
 .stat-card :deep(.el-card__body) {
   display: flex;
   align-items: center;
   gap: 16px;
   padding: 20px;
+  background: #1e1e36;
 }
 .stat-icon {
   width: 56px;
@@ -226,16 +247,17 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #333;
+  color: #f7931e;
+  background: rgba(247,147,30,0.12) !important;
 }
 .stat-value {
   font-size: 28px;
   font-weight: 700;
-  color: #303133;
+  color: #f7931e;
 }
 .stat-label {
   font-size: 14px;
-  color: #909399;
+  color: #c0c0d0;
   margin-top: 4px;
 }
 .card-header {
@@ -243,6 +265,9 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   font-weight: 600;
+}
+.card-header :deep(.el-button--primary.is-link) {
+  color: #f7931e;
 }
 .top-projects {
   max-height: 350px;
@@ -253,30 +278,30 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   padding: 10px 0;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid #2a2a4a;
   cursor: pointer;
   transition: background 0.2s;
 }
 .top-project-item:hover {
-  background: #f5f7fa;
+  background: rgba(247,147,30,0.06);
   border-radius: 6px;
 }
 .rank {
   width: 24px;
   height: 24px;
   border-radius: 6px;
-  background: #f0f0f0;
+  background: #2a2a4a;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 12px;
   font-weight: 600;
-  color: #909399;
+  color: #8a8aaa;
   flex-shrink: 0;
 }
 .rank.top3 {
-  background: #ecf5ff;
-  color: #409eff;
+  background: rgba(247,147,30,0.2);
+  color: #f7931e;
 }
 .project-info {
   flex: 1;
@@ -288,6 +313,7 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: #e0e0e0;
 }
 .project-meta {
   display: flex;

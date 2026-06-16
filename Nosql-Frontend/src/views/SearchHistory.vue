@@ -112,10 +112,10 @@ onMounted(() => {
 }
 .page-header h2 {
   font-size: 24px;
-  color: #303133;
+  color: #e0e0e0;
 }
 .page-header p {
-  color: #909399;
+  color: #c0c0d0;
   margin-top: 4px;
 }
 </style>
