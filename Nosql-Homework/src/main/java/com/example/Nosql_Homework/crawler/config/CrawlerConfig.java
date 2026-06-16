@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 爬虫线程池 & 限速配置
+ * 由于commit太吃token了,所以现在已经不主动爬commit了,线程池配置蛮留着
  */
 @Slf4j
 @Configuration
