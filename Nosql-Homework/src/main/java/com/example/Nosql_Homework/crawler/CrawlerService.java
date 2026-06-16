@@ -235,6 +235,35 @@ public class CrawlerService {
         return result;
     }
 
+    /**
+     * 一键修复历史数据：遍历所有项目，将 language 字段归一化为标准名
+     * 解决历史数据中 "js"/"JavaScript"、"java"/"Java" 等混合存在的问题
+     * @return { total, updated } 总数和实际修改数
+     */
+    public Map<String, Object> normalizeAllProjectLanguages() {
+        List<Project> allProjects = projectRepository.findAll();
+        int total = allProjects.size();
+        int updated = 0;
+
+        log.info("========== 语言归一化修复开始: 共 {} 个项目 ==========", total);
+
+        for (Project p : allProjects) {
+            String oldLang = p.getLanguage();
+            if (oldLang == null || oldLang.isBlank()) continue;
+
+            String normalized = LanguageNormalizer.normalize(oldLang);
+            if (!normalized.equals(oldLang)) {
+                log.info("  修复: {} → {}", oldLang, normalized);
+                p.setLanguage(normalized);
+                projectRepository.save(p);
+                updated++;
+            }
+        }
+
+        log.info("========== 语言归一化完成: 总数={}, 修复={} ==========", total, updated);
+        return Map.of("total", total, "updated", updated);
+    }
+
     // ======================== 内部 ========================
 
     /** 保存 Owner + Project 元信息 (不拉取 commits, commits 改为按需拉取) */

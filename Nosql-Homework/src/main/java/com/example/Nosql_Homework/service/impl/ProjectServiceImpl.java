@@ -8,8 +8,14 @@ import com.example.Nosql_Homework.service.ProjectService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.aggregation.Aggregation;
+import org.springframework.data.mongodb.core.aggregation.AggregationResults;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Service
@@ -17,6 +23,7 @@ import java.util.Optional;
 public class ProjectServiceImpl implements ProjectService {
 
     private final ProjectRepository projectRepository;
+    private final MongoTemplate mongoTemplate;
 
     @Override
     public PageResult<Project> listProjects(String language, String category, Integer minStars, Pageable pageable) {
@@ -57,5 +64,17 @@ public class ProjectServiceImpl implements ProjectService {
     @Override
     public void deleteById(String id) {
         projectRepository.deleteById(id);
+    }
+
+    @Override
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public List<Map<String, Object>> getLanguageStats() {
+        Aggregation aggregation = Aggregation.newAggregation(
+                Aggregation.group("language").count().as("count"),
+                Aggregation.sort(Sort.by(Sort.Direction.DESC, "count"))
+        );
+        AggregationResults<Map> results = mongoTemplate.aggregate(
+                aggregation, "projects", Map.class);
+        return (List) results.getMappedResults();
     }
 }

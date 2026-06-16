@@ -6,6 +6,8 @@ import com.example.Nosql_Homework.crawler.util.LanguageNormalizer;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Map;
+
 @RestController
 @RequestMapping("/api/crawler")
 @RequiredArgsConstructor
@@ -46,5 +48,15 @@ public class CrawlerController {
     public R<String> backfillAll(@RequestParam(defaultValue = "false") boolean force) {
         new Thread(() -> crawlerService.backfillAll(force)).start();
         return R.ok("全量回填任务已启动 (force=" + force + ", 后台异步执行, 请查看日志)");
+    }
+
+    /**
+     * 一键修复历史数据中的语言名称: 将 "js"/"java" 等归一化为 "JavaScript"/"Java"
+     * POST /api/crawler/normalize-languages
+     */
+    @PostMapping("/normalize-languages")
+    public R<Map<String, Object>> normalizeLanguages() {
+        Map<String, Object> result = crawlerService.normalizeAllProjectLanguages();
+        return R.ok(result);
     }
 }

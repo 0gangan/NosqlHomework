@@ -68,6 +68,12 @@ public class ProjectController {
         return R.ok(Map.of("projectId", id, "fetched", count));
     }
 
+    /** 语言分布统计 */
+    @GetMapping("/language-stats")
+    public R<List<Map<String, Object>>> languageStats() {
+        return R.ok(projectService.getLanguageStats());
+    }
+
     @PostMapping
     public R<Project> create(@RequestBody Project project) {
         return R.ok(projectService.save(project));

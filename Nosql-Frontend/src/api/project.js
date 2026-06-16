@@ -30,6 +30,11 @@ export function createProject(data) {
   return api.post('/projects', data)
 }
 
+// 语言分布统计
+export function getLanguageStats() {
+  return api.get('/projects/language-stats')
+}
+
 // 删除项目
 export function deleteProject(id) {
   return api.delete(`/projects/${id}`)
