@@ -2,6 +2,7 @@ package com.example.Nosql_Homework.controller;
 
 import com.example.Nosql_Homework.common.R;
 import com.example.Nosql_Homework.crawler.CrawlerService;
+import com.example.Nosql_Homework.crawler.util.LanguageNormalizer;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
@@ -20,7 +21,8 @@ public class CrawlerController {
     public R<String> trigger(
             @RequestParam(defaultValue = "Java") String language,
             @RequestParam(defaultValue = "5") int maxPages) {
-        new Thread(() -> crawlerService.crawlByLanguage(language, maxPages)).start();
+        String normalized = LanguageNormalizer.normalize(language);
+        new Thread(() -> crawlerService.crawlByLanguage(normalized, maxPages)).start();
         return R.ok("采集任务已启动: language=" + language + ", maxPages=" + maxPages);
     }
 

@@ -1,6 +1,7 @@
 package com.example.Nosql_Homework.service.impl;
 
 import com.example.Nosql_Homework.common.PageResult;
+import com.example.Nosql_Homework.crawler.util.LanguageNormalizer;
 import com.example.Nosql_Homework.entity.Project;
 import com.example.Nosql_Homework.repository.ProjectRepository;
 import com.example.Nosql_Homework.service.ProjectService;
@@ -19,11 +20,12 @@ public class ProjectServiceImpl implements ProjectService {
 
     @Override
     public PageResult<Project> listProjects(String language, String category, Integer minStars, Pageable pageable) {
+        String normalizedLang = LanguageNormalizer.normalize(language);
         Page<Project> page;
-        if (language != null && minStars != null) {
-            page = projectRepository.findByLanguageAndStarsCountGreaterThan(language, minStars, pageable);
-        } else if (language != null) {
-            page = projectRepository.findByLanguage(language, pageable);
+        if (normalizedLang != null && minStars != null) {
+            page = projectRepository.findByLanguageAndStarsCountGreaterThan(normalizedLang, minStars, pageable);
+        } else if (normalizedLang != null) {
+            page = projectRepository.findByLanguage(normalizedLang, pageable);
         } else if (category != null) {
             page = projectRepository.findByCategory(category, pageable);
         } else {

@@ -5,6 +5,7 @@ import com.example.Nosql_Homework.crawler.crawler.ContributorCrawler;
 import com.example.Nosql_Homework.crawler.crawler.OwnerCrawler;
 import com.example.Nosql_Homework.crawler.crawler.ProjectCrawler;
 import com.example.Nosql_Homework.crawler.dto.GitHubRepo;
+import com.example.Nosql_Homework.crawler.util.LanguageNormalizer;
 import com.example.Nosql_Homework.entity.Contributor;
 import com.example.Nosql_Homework.entity.Project;
 import com.example.Nosql_Homework.repository.ProjectRepository;
@@ -41,9 +42,10 @@ public class CrawlerService {
     /**
      * 按语言增量采集
      */
-    public void crawlByLanguage(String language, int maxPages) {
+    public void crawlByLanguage(String rawLanguage, int maxPages) {
+        String language = LanguageNormalizer.normalize(rawLanguage);
         log.info("========== 开始采集 ==========");
-        log.info("  language    = {}", language);
+        log.info("  language    = {} (原始: {})", language, rawLanguage);
         log.info("  maxPages    = {}", maxPages);
         log.info("  perPage     = {}", PER_PAGE);
         log.info("==============================");

@@ -24,5 +24,7 @@ public interface ProjectRepository extends MongoRepository<Project, String> {
 
     Page<Project> findByLanguageAndStarsCountGreaterThan(String language, Integer minStars, Pageable pageable);
 
+    Page<Project> findByStarsCountGreaterThan(Integer minStars, Pageable pageable);
+
     Page<Project> findByDescriptionContainingIgnoreCaseOrNameContainingIgnoreCase(String descKeyword, String nameKeyword, Pageable pageable);
 }
