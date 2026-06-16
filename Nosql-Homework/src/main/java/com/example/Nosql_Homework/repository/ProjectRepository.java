@@ -25,4 +25,10 @@ public interface ProjectRepository extends MongoRepository<Project, String> {
     Page<Project> findByLanguageAndStarsCountGreaterThan(String language, Integer minStars, Pageable pageable);
 
     Page<Project> findByDescriptionContainingIgnoreCaseOrNameContainingIgnoreCase(String descKeyword, String nameKeyword, Pageable pageable);
+
+    /** Tiger-RAG: 获取尚未生成向量的项目 (用于批量补全) */
+    List<Project> findByHasEmbeddingFalseOrHasEmbeddingIsNull();
+
+    /** Tiger-RAG: 尚未生成向量的项目数量 */
+    long countByHasEmbeddingFalseOrHasEmbeddingIsNull();
 }

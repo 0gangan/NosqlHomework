@@ -25,6 +25,11 @@ const routes = [
     path: '/history',
     name: 'SearchHistory',
     component: () => import('../views/SearchHistory.vue')
+  },
+  {
+    path: '/tiger-rag',
+    name: 'TigerRag',
+    component: () => import('../views/TigerRag.vue')
   }
 ]
 

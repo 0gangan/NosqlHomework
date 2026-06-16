@@ -300,13 +300,47 @@ public class CrawlerService {
     // ======================== DTO ========================
 
     @SuppressWarnings("unchecked")
-    private record GitHubRepo(
-            long id, String name, String fullName, String description,
-            String language, int stargazersCount, int forksCount,
-            int watchersCount, int openIssuesCount, int size,
-            String defaultBranch, String createdAt, String updatedAt,
-            Map<String, Object> owner, List<String> topics, Map<String, Object> license
-    ) {
+    private static class GitHubRepo {
+        final long id;
+        final String name;
+        final String fullName;
+        final String description;
+        final String language;
+        final int stargazersCount;
+        final int forksCount;
+        final int watchersCount;
+        final int openIssuesCount;
+        final int size;
+        final String defaultBranch;
+        final String createdAt;
+        final String updatedAt;
+        final Map<String, Object> owner;
+        final List<String> topics;
+        final Map<String, Object> license;
+
+        GitHubRepo(long id, String name, String fullName, String description,
+                   String language, int stargazersCount, int forksCount,
+                   int watchersCount, int openIssuesCount, int size,
+                   String defaultBranch, String createdAt, String updatedAt,
+                   Map<String, Object> owner, List<String> topics, Map<String, Object> license) {
+            this.id = id;
+            this.name = name;
+            this.fullName = fullName;
+            this.description = description;
+            this.language = language;
+            this.stargazersCount = stargazersCount;
+            this.forksCount = forksCount;
+            this.watchersCount = watchersCount;
+            this.openIssuesCount = openIssuesCount;
+            this.size = size;
+            this.defaultBranch = defaultBranch;
+            this.createdAt = createdAt;
+            this.updatedAt = updatedAt;
+            this.owner = owner;
+            this.topics = topics;
+            this.license = license;
+        }
+
         static GitHubRepo fromMap(Map<String, Object> m) {
             return new GitHubRepo(
                     ((Number) m.get("id")).longValue(),
@@ -327,5 +361,23 @@ public class CrawlerService {
                     (Map<String, Object>) m.get("license")
             );
         }
+
+        // ===== getter 方法 (保持与 record 一致的调用风格) =====
+        public long id() { return id; }
+        public String name() { return name; }
+        public String fullName() { return fullName; }
+        public String description() { return description; }
+        public String language() { return language; }
+        public int stargazersCount() { return stargazersCount; }
+        public int forksCount() { return forksCount; }
+        public int watchersCount() { return watchersCount; }
+        public int openIssuesCount() { return openIssuesCount; }
+        public int size() { return size; }
+        public String defaultBranch() { return defaultBranch; }
+        public String createdAt() { return createdAt; }
+        public String updatedAt() { return updatedAt; }
+        public Map<String, Object> owner() { return owner; }
+        public List<String> topics() { return topics; }
+        public Map<String, Object> license() { return license; }
     }
 }

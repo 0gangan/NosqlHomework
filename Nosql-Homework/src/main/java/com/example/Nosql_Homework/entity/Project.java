@@ -91,4 +91,33 @@ public class Project {
 
     @Field("crawled_at")
     private Date crawledAt;
+
+    // ========== Tiger-RAG 向量数据库字段 (MongoDB Atlas Vector Search) ==========
+
+    /** 内容向量（由豆包 Embedding 生成，1024 维） */
+    @Field("embedding")
+    private List<Float> embedding;
+
+    /** 生成向量时使用的 embedding 模型名，便于后续升级模型时重算 */
+    @Field("embedding_model")
+    private String embeddingModel;
+
+    /** 是否已生成向量（用于增量补全时快速过滤） */
+    @Field("has_embedding")
+    @Indexed
+    private Boolean hasEmbedding;
+
+    /** 组装转向量用的文本（标题 + 描述 + topics + 语言 + 分类） */
+    public String toEmbeddingText() {
+        StringBuilder sb = new StringBuilder();
+        if (fullName != null) sb.append("项目: ").append(fullName).append("\n");
+        if (name != null) sb.append("名称: ").append(name).append("\n");
+        if (language != null) sb.append("编程语言: ").append(language).append("\n");
+        if (category != null) sb.append("分类: ").append(category).append("\n");
+        if (topics != null && !topics.isEmpty()) sb.append("标签: ").append(String.join(", ", topics)).append("\n");
+        if (description != null) sb.append("描述: ").append(description).append("\n");
+        if (starsCount != null) sb.append("Star 数: ").append(starsCount).append("\n");
+        if (license != null) sb.append("License: ").append(license).append("\n");
+        return sb.toString().trim();
+    }
 }
