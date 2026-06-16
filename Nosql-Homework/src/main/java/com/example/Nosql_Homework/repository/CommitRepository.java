@@ -14,4 +14,10 @@ public interface CommitRepository extends MongoRepository<Commit, String> {
     Optional<Commit> findBySha(String sha);
 
     Page<Commit> findByProjectIdOrderByCommitDateDesc(String projectId, Pageable pageable);
+
+    /** 检查某个项目是否已有提交数据 */
+    boolean existsByProjectId(String projectId);
+
+    /** 删除某个项目的所有提交 (回填前清理旧数据) */
+    long deleteByProjectId(String projectId);
 }

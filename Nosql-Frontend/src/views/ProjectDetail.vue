@@ -94,14 +94,22 @@
                   <span class="commit-sha">{{ commit.sha?.substring(0, 7) }}</span>
                 </div>
                 <p class="commit-message">{{ commit.message }}</p>
-                <div class="commit-stats">
-                  <span class="additions">+{{ commit.additions || 0 }}</span>
-                  <span class="deletions">-{{ commit.deletions || 0 }}</span>
-                </div>
               </el-card>
             </el-timeline-item>
           </el-timeline>
           <el-empty v-else description="暂无提交记录" />
+          <div v-if="commitTotal > 0" style="margin-top: 16px; text-align: right">
+            <el-pagination
+              v-model:current-page="commitPage.page"
+              :page-size="commitPage.size"
+              :total="commitTotal"
+              :page-sizes="[10, 20, 50]"
+              layout="total, sizes, prev, pager, next"
+              size="small"
+              @size-change="loadCommits"
+              @current-change="loadCommits"
+            />
+          </div>
         </el-card>
       </el-col>
 
@@ -145,7 +153,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { getProject, getProjectCommits, getProjectContributors } from '../api/project'
 
@@ -154,6 +162,8 @@ const loading = ref(true)
 const project = ref(null)
 const commits = ref([])
 const contributors = ref([])
+const commitTotal = ref(0)
+const commitPage = reactive({ page: 1, size: 20 })
 
 const statItems = [
   { key: 'starsCount', label: 'Star' },
@@ -195,16 +205,31 @@ function formatDateTime(d) {
   return new Date(d).toLocaleString('zh-CN')
 }
 
+async function loadCommits() {
+  if (!route.params.id) return
+  try {
+    const data = await getProjectCommits(route.params.id, {
+      page: commitPage.page,
+      size: commitPage.size
+    })
+    commits.value = data.records || []
+    commitTotal.value = data.total || 0
+  } catch (e) {
+    console.error('加载提交历史失败:', e)
+  }
+}
+
 onMounted(async () => {
   try {
     const id = route.params.id
     const [proj, commitData, contribData] = await Promise.all([
       getProject(id),
-      getProjectCommits(id, { page: 1, size: 20 }),
+      getProjectCommits(id, { page: 1, size: commitPage.size }),
       getProjectContributors(id)
     ])
     project.value = proj
     commits.value = commitData.records || []
+    commitTotal.value = commitData.total || 0
     contributors.value = Array.isArray(contribData) ? contribData : (contribData.records || [])
   } catch (e) {
     console.error('加载项目详情失败:', e)

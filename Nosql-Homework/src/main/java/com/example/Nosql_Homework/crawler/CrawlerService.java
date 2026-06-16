@@ -2,8 +2,12 @@ package com.example.Nosql_Homework.crawler;
 
 import com.example.Nosql_Homework.entity.Owner;
 import com.example.Nosql_Homework.entity.Project;
+import com.example.Nosql_Homework.entity.Commit;
+import com.example.Nosql_Homework.entity.Contributor;
 import com.example.Nosql_Homework.repository.OwnerRepository;
 import com.example.Nosql_Homework.repository.ProjectRepository;
+import com.example.Nosql_Homework.repository.CommitRepository;
+import com.example.Nosql_Homework.repository.ContributorRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -32,6 +36,8 @@ public class CrawlerService {
     private final RestTemplate restTemplate = createRestTemplate();
     private final ProjectRepository projectRepository;
     private final OwnerRepository ownerRepository;
+    private final CommitRepository commitRepository;
+    private final ContributorRepository contributorRepository;
 
     private static RestTemplate createRestTemplate() {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
@@ -251,7 +257,8 @@ public class CrawlerService {
         // Project (幂等: 按 github_id upsert)
         Project existing = projectRepository.findByGithubId(repo.id).orElse(null);
         Project project;
-        if (existing != null) {
+        boolean isNew = (existing == null);
+        if (!isNew) {
             project = existing;
             // 只更新变化字段
             project.setStarsCount(repo.stargazersCount);
@@ -280,7 +287,16 @@ public class CrawlerService {
                     .build();
         }
         project.setCrawledAt(new Date());
-        projectRepository.save(project);
+        project = projectRepository.save(project);
+
+        // 新项目: 拉取 commits 和 contributors (异步, 不影响主流程)
+        if (isNew) {
+            try {
+                saveRepoCommitsAndContributors(project);
+            } catch (Exception e) {
+                log.warn("  拉取 commits/contributors 失败 project={}: {}", project.getFullName(), e.getMessage());
+            }
+        }
     }
 
     /** 设置 Token 认证头 */
@@ -295,6 +311,349 @@ public class CrawlerService {
         } else {
             log.debug("  未配置Token, 使用无认证请求 (限速更严格)");
         }
+    }
+
+    // ======================== Commits & Contributors 采集 ========================
+
+    /**
+     * 为新爬取的项目拉取 commits 和 contributors 并入库
+     */
+    public void saveRepoCommitsAndContributors(Project project) {
+        String fullName = project.getFullName();
+        if (fullName == null || !fullName.contains("/")) {
+            log.warn("  项目 fullName 格式异常, 跳过: {}", fullName);
+            return;
+        }
+        String[] parts = fullName.split("/");
+        String owner = parts[0];
+        String repo = parts[1];
+
+        try {
+            fetchCommits(owner, repo, project.getId(), 3);
+        } catch (Exception e) {
+            log.error("  拉取 commits 失败 project={}: {}", fullName, e.getMessage());
+        }
+
+        try {
+            fetchContributors(owner, repo, project.getId(), 1);
+        } catch (Exception e) {
+            log.error("  拉取 contributors 失败 project={}: {}", fullName, e.getMessage());
+        }
+
+        // 更新项目的 commits/contributors 计数
+        try {
+            long commitTotal = commitRepository.findByProjectIdOrderByCommitDateDesc(
+                    project.getId(), org.springframework.data.domain.PageRequest.of(0, 1)).getTotalElements();
+            List<Contributor> contribs = contributorRepository.findByProjectIdOrderByContributionsDesc(project.getId());
+            project.setCommitsCount((int) commitTotal);
+            project.setContributorsCount(contribs.size());
+            projectRepository.save(project);
+        } catch (Exception e) {
+            log.warn("  更新项目计数失败 project={}: {}", fullName, e.getMessage());
+        }
+    }
+
+    /**
+     * 从 GitHub API 拉取 commits 并存入 MongoDB (幂等: 按 sha 去重)
+     */
+    public int fetchCommits(String owner, String repo, String projectId, int maxPages) {
+        String baseUrl = "https://api.github.com/repos/" + owner + "/" + repo
+                + "/commits?per_page=100";
+        int saved = 0;
+
+        for (int page = 1; page <= maxPages; page++) {
+            String url = baseUrl + "&page=" + page;
+            try {
+                rateLimit();
+                HttpHeaders headers = new HttpHeaders();
+                headers.set("Accept", "application/vnd.github+json");
+                headers.set("X-GitHub-Api-Version", "2022-11-28");
+                headers.set("User-Agent", "Nosql-Homework-Crawler");
+                addAuth(headers);
+
+                ResponseEntity<List<Map<String, Object>>> resp = restTemplate.exchange(
+                        url, HttpMethod.GET, new HttpEntity<>(headers),
+                        new ParameterizedTypeReference<List<Map<String, Object>>>() {});
+
+                if (resp.getBody() == null || resp.getBody().isEmpty()) {
+                    break;
+                }
+
+                for (Map<String, Object> item : resp.getBody()) {
+                    try {
+                        saveCommit(item, projectId);
+                        saved++;
+                    } catch (Exception e) {
+                        log.debug("  保存 commit 失败 sha={}: {}", item.get("sha"), e.getMessage());
+                    }
+                }
+                log.info("  commits page={} 拉取 {} 条, 累计保存 {}", page, resp.getBody().size(), saved);
+            } catch (HttpStatusCodeException e) {
+                if (e.getStatusCode().value() == 409) {
+                    log.info("  仓库 {} 为空或无 commits, 跳过", repo);
+                } else if (e.getStatusCode().value() == 404) {
+                    log.warn("  仓库 {}/{} 不存在或已删除", owner, repo);
+                } else {
+                    log.warn("  commits HTTP {} page={}: {}", e.getStatusCode(), page, e.getMessage());
+                }
+                break;
+            } catch (Exception e) {
+                log.warn("  commits 请求失败 page={}: {}", page, e.getMessage());
+                break;
+            }
+        }
+        log.info("  commits 采集完成: {}/{}, 共保存 {} 条", owner, repo, saved);
+        return saved;
+    }
+
+    /**
+     * 从 GitHub API 拉取 contributors 并存入 MongoDB (幂等: 按 projectId + githubId 去重)
+     */
+    public int fetchContributors(String owner, String repo, String projectId, int maxPages) {
+        String baseUrl = "https://api.github.com/repos/" + owner + "/" + repo
+                + "/contributors?per_page=100";
+        int saved = 0;
+
+        for (int page = 1; page <= maxPages; page++) {
+            String url = baseUrl + "&page=" + page;
+            try {
+                rateLimit();
+                HttpHeaders headers = new HttpHeaders();
+                headers.set("Accept", "application/vnd.github+json");
+                headers.set("X-GitHub-Api-Version", "2022-11-28");
+                headers.set("User-Agent", "Nosql-Homework-Crawler");
+                addAuth(headers);
+
+                ResponseEntity<List<Map<String, Object>>> resp = restTemplate.exchange(
+                        url, HttpMethod.GET, new HttpEntity<>(headers),
+                        new ParameterizedTypeReference<List<Map<String, Object>>>() {});
+
+                if (resp.getBody() == null || resp.getBody().isEmpty()) {
+                    break;
+                }
+
+                for (Map<String, Object> item : resp.getBody()) {
+                    try {
+                        saveContributor(item, projectId);
+                        saved++;
+                    } catch (Exception e) {
+                        log.debug("  保存 contributor 失败 login={}: {}", item.get("login"), e.getMessage());
+                    }
+                }
+                log.info("  contributors page={} 拉取 {} 条, 累计保存 {}", page, resp.getBody().size(), saved);
+            } catch (HttpStatusCodeException e) {
+                if (e.getStatusCode().value() == 204) {
+                    log.info("  仓库 {} 无 contributors 数据", repo);
+                } else if (e.getStatusCode().value() == 404) {
+                    log.warn("  仓库 {}/{} 不存在或已删除", owner, repo);
+                } else {
+                    log.warn("  contributors HTTP {} page={}: {}", e.getStatusCode(), page, e.getMessage());
+                }
+                break;
+            } catch (Exception e) {
+                log.warn("  contributors 请求失败 page={}: {}", page, e.getMessage());
+                break;
+            }
+        }
+        log.info("  contributors 采集完成: {}/{}, 共保存 {} 条", owner, repo, saved);
+        return saved;
+    }
+
+    private void saveCommit(Map<String, Object> item, String projectId) {
+        String sha = (String) item.get("sha");
+        if (sha == null || commitRepository.findBySha(sha).isPresent()) {
+            return; // 已存在, 跳过
+        }
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> commitData = (Map<String, Object>) item.get("commit");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> authorData = commitData != null
+                ? (Map<String, Object>) commitData.get("author") : null;
+
+        String authorLogin = authorData != null ? (String) authorData.get("name") : "unknown";
+        String message = commitData != null ? (String) commitData.get("message") : "";
+        String dateStr = authorData != null ? (String) authorData.get("date") : null;
+
+        Commit commit = Commit.builder()
+                .projectId(projectId)
+                .sha(sha)
+                .authorLogin(authorLogin)
+                .message(message)
+                .commitDate(dateStr != null ? Date.from(Instant.parse(dateStr)) : new Date())
+                .additions(0)
+                .deletions(0)
+                .build();
+        commitRepository.save(commit);
+    }
+
+    private void saveContributor(Map<String, Object> item, String projectId) {
+        Number githubIdNum = (Number) item.get("id");
+        if (githubIdNum == null) return;
+        long githubId = githubIdNum.longValue();
+
+        // 幂等: 已存在则更新 contributions
+        Contributor existing = contributorRepository.findByProjectIdAndGithubId(projectId, githubId).orElse(null);
+        if (existing != null) {
+            existing.setContributions((Integer) item.getOrDefault("contributions", existing.getContributions()));
+            contributorRepository.save(existing);
+            return;
+        }
+
+        Contributor contributor = Contributor.builder()
+                .projectId(projectId)
+                .githubId(githubId)
+                .login((String) item.get("login"))
+                .avatarUrl((String) item.get("avatar_url"))
+                .contributions((Integer) item.getOrDefault("contributions", 0))
+                .build();
+        contributorRepository.save(contributor);
+    }
+
+    // ======================== 批量回填 ========================
+
+    /**
+     * 批量回填: 遍历所有项目, 对缺少 commits/contributors 的项目从 GitHub API 补齐
+     * @param force 是否强制覆盖已有数据
+     */
+    public Map<String, Object> backfillAll(boolean force) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        List<Project> allProjects = projectRepository.findAll();
+        int total = allProjects.size();
+        int success = 0;
+        int skipped = 0;
+        int failed = 0;
+
+        log.info("========== 批量回填开始 ==========");
+        log.info("  项目总数: {}, 强制覆盖: {}", total, force);
+        result.put("totalProjects", total);
+        result.put("force", force);
+
+        for (int i = 0; i < total; i++) {
+            Project project = allProjects.get(i);
+            String fullName = project.getFullName();
+            log.info("[{}/{}] 处理: {}", i + 1, total, fullName);
+
+            if (fullName == null || !fullName.contains("/")) {
+                log.warn("  跳过: fullName 格式异常");
+                skipped++;
+                continue;
+            }
+
+            String[] parts = fullName.split("/");
+            String owner = parts[0];
+            String repo = parts[1];
+
+            boolean hasCommits = commitRepository.existsByProjectId(project.getId());
+            boolean hasContributors = contributorRepository.existsByProjectId(project.getId());
+
+            try {
+                if (force || !hasCommits) {
+                    if (force && hasCommits) {
+                        commitRepository.deleteByProjectId(project.getId());
+                    }
+                    int saved = fetchCommits(owner, repo, project.getId(), 5);
+                    if (saved > 0) {
+                        project.setCommitsCount(saved);
+                    }
+                } else {
+                    log.info("  commits 已存在, 跳过");
+                }
+
+                if (force || !hasContributors) {
+                    if (force && hasContributors) {
+                        contributorRepository.deleteByProjectId(project.getId());
+                    }
+                    fetchContributors(owner, repo, project.getId(), 2);
+                    List<Contributor> contribs = contributorRepository.findByProjectIdOrderByContributionsDesc(project.getId());
+                    project.setContributorsCount(contribs.size());
+                } else {
+                    log.info("  contributors 已存在, 跳过");
+                }
+
+                projectRepository.save(project);
+                success++;
+                log.info("  ✅ 完成: {} (commits={}, contributors={})",
+                        fullName, project.getCommitsCount(), project.getContributorsCount());
+            } catch (Exception e) {
+                failed++;
+                log.error("  ❌ 失败 {}: {}", fullName, e.getMessage());
+            }
+
+            // 每 10 个项目打印进度
+            if ((i + 1) % 10 == 0) {
+                log.info("========== 回填进度: {}/{} (成功{} 跳过{} 失败{}) ==========",
+                        i + 1, total, success, skipped, failed);
+            }
+        }
+
+        result.put("success", success);
+        result.put("skipped", skipped);
+        result.put("failed", failed);
+
+        log.info("========== 批量回填结束 ==========");
+        log.info("  成功: {}, 跳过: {}, 失败: {}", success, skipped, failed);
+        return result;
+    }
+
+    /**
+     * 增量回填: 只处理缺少 commits/contributors 的项目
+     */
+    public Map<String, Object> backfillMissing() {
+        List<Project> allProjects = projectRepository.findAll();
+        List<Project> missing = allProjects.stream()
+                .filter(p -> !commitRepository.existsByProjectId(p.getId())
+                        || !contributorRepository.existsByProjectId(p.getId()))
+                .toList();
+
+        log.info("========== 增量回填: 共 {} 个项目缺失数据 ==========", missing.size());
+
+        // 仅对缺失项目执行 (复用 backfillAll 逻辑但只传 missing)
+        // 简单实现: 设置标记后调用原有逻辑
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("totalProjects", allProjects.size());
+        result.put("missingProjects", missing.size());
+
+        int success = 0;
+        int failed = 0;
+
+        for (int i = 0; i < missing.size(); i++) {
+            Project project = missing.get(i);
+            String fullName = project.getFullName();
+            log.info("[{}/{}] 处理: {}", i + 1, missing.size(), fullName);
+
+            if (fullName == null || !fullName.contains("/")) {
+                log.warn("  跳过: fullName 格式异常");
+                continue;
+            }
+
+            String[] parts = fullName.split("/");
+            String owner = parts[0];
+            String repo = parts[1];
+
+            try {
+                if (!commitRepository.existsByProjectId(project.getId())) {
+                    int saved = fetchCommits(owner, repo, project.getId(), 5);
+                    if (saved > 0) project.setCommitsCount(saved);
+                }
+                if (!contributorRepository.existsByProjectId(project.getId())) {
+                    fetchContributors(owner, repo, project.getId(), 2);
+                    List<Contributor> contribs = contributorRepository
+                            .findByProjectIdOrderByContributionsDesc(project.getId());
+                    project.setContributorsCount(contribs.size());
+                }
+                projectRepository.save(project);
+                success++;
+            } catch (Exception e) {
+                failed++;
+                log.error("  ❌ 失败 {}: {}", fullName, e.getMessage());
+            }
+        }
+
+        result.put("success", success);
+        result.put("failed", failed);
+        log.info("========== 增量回填结束: 成功{} 失败{} ==========", success, failed);
+        return result;
     }
 
     // ======================== DTO ========================
