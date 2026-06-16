@@ -2,6 +2,7 @@ package com.example.Nosql_Homework.controller;
 
 import com.example.Nosql_Homework.common.R;
 import com.example.Nosql_Homework.common.PageResult;
+import com.example.Nosql_Homework.crawler.CrawlerService;
 import com.example.Nosql_Homework.entity.*;
 import com.example.Nosql_Homework.service.*;
 import lombok.RequiredArgsConstructor;
@@ -10,6 +11,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/projects")
@@ -19,6 +21,7 @@ public class ProjectController {
     private final ProjectService projectService;
     private final CommitService commitService;
     private final ContributorService contributorService;
+    private final CrawlerService crawlerService;
 
     @GetMapping
     public R<PageResult<Project>> list(
@@ -53,6 +56,16 @@ public class ProjectController {
     @GetMapping("/{id}/contributors")
     public R<List<Contributor>> contributors(@PathVariable String id) {
         return R.ok(contributorService.listByProject(id));
+    }
+
+    /**
+     * 按需拉取 commit 历史 (点击"查看 Commit"按钮时调用)
+     * POST /api/projects/{id}/fetch-commits
+     */
+    @PostMapping("/{id}/fetch-commits")
+    public R<Map<String, Object>> fetchCommits(@PathVariable String id) {
+        int count = crawlerService.fetchCommitsOnDemand(id);
+        return R.ok(Map.of("projectId", id, "fetched", count));
     }
 
     @PostMapping

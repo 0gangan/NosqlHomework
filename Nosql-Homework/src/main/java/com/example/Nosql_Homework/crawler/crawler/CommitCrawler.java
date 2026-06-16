@@ -23,23 +23,38 @@ public class CommitCrawler {
     private final GitHubApiClient apiClient;
     private final CommitRepository commitRepository;
 
+    /** GitHub API 每页最大条数 */
+    private static final int PER_PAGE = 100;
+    /** 每个项目最多拉取 commit 条数 */
+    private static final int MAX_COMMITS = 300;
+
     /**
-     * 拉取并保存指定仓库的 commits
+     * 拉取并保存指定仓库的 commits (最多 {@value MAX_COMMITS} 条)
      * @param owner     GitHub 用户名/组织名
      * @param repo      仓库名
      * @param projectId MongoDB 中 project 的 _id
-     * @param maxPages  最多翻页数
      * @return 成功保存条数
      */
-    public int fetchAndSaveCommits(String owner, String repo, String projectId, int maxPages) {
-        int saved = 0;
+    public int fetchAndSaveCommits(String owner, String repo, String projectId) {
+        return fetchAndSaveCommits(owner, repo, projectId, MAX_COMMITS);
+    }
 
-        for (int page = 1; page <= maxPages; page++) {
+    /**
+     * 拉取并保存指定仓库的 commits (自定义最大条数)
+     */
+    public int fetchAndSaveCommits(String owner, String repo, String projectId, int maxRecords) {
+        int saved = 0;
+        int remaining = Math.min(maxRecords, MAX_COMMITS);
+
+        for (int page = 1; remaining > 0; page++) {
             apiClient.rateLimit();
-            List<Map<String, Object>> commits = apiClient.listCommits(owner, repo, page);
+
+            int perPage = Math.min(PER_PAGE, remaining);
+            List<Map<String, Object>> commits = apiClient.listCommits(owner, repo, page, perPage);
             if (commits.isEmpty()) break;
 
             for (Map<String, Object> item : commits) {
+                if (saved >= maxRecords) break;
                 try {
                     saveCommit(item, projectId);
                     saved++;
@@ -47,9 +62,11 @@ public class CommitCrawler {
                     log.debug("  保存 commit 失败 sha={}: {}", item.get("sha"), e.getMessage());
                 }
             }
-            log.info("  commits page={} 拉取 {} 条, 累计保存 {}", page, commits.size(), saved);
+            remaining = maxRecords - saved;
+            log.info("  commits page={} 拉取 {} 条, 累计保存 {} (剩余配额 {})",
+                    page, commits.size(), saved, remaining);
         }
-        log.info("  commits 采集完成: {}/{}, 共保存 {} 条", owner, repo, saved);
+        log.info("  commits 采集完成: {}/{}, 共保存 {} 条 (上限: {})", owner, repo, saved, maxRecords);
         return saved;
     }
 

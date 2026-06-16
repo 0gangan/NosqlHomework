@@ -16,7 +16,6 @@ import org.springframework.stereotype.Service;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
 
 /**
  * 爬虫编排服务 — 协调四个 Collection 爬虫完成增量采集与回填
@@ -32,7 +31,6 @@ public class CrawlerService {
     private final CommitCrawler commitCrawler;
     private final ContributorCrawler contributorCrawler;
     private final ProjectRepository projectRepository;
-    private final ExecutorService commitExecutor;
 
     private static final int PER_PAGE = 30;
 
@@ -95,40 +93,36 @@ public class CrawlerService {
     }
 
     /**
-     * 为新爬取的项目拉取 commits 和 contributors 并入库
+     * 按需拉取项目的 commits 并入库 (用户点击"查看Commit"时调用)
+     * @return 拉取的 commit 条数
      */
-    public void saveRepoCommitsAndContributors(Project project) {
+    public int fetchCommitsOnDemand(String projectId) {
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new IllegalArgumentException("项目不存在: " + projectId));
+
         String fullName = project.getFullName();
         if (fullName == null || !fullName.contains("/")) {
-            log.warn("  项目 fullName 格式异常, 跳过: {}", fullName);
-            return;
+            throw new IllegalArgumentException("项目 fullName 格式异常: " + fullName);
         }
+
         String[] parts = fullName.split("/");
         String owner = parts[0];
         String repo = parts[1];
 
-        try {
-            commitCrawler.fetchAndSaveCommits(owner, repo, project.getId(), 3);
-        } catch (Exception e) {
-            log.error("  拉取 commits 失败 project={}: {}", fullName, e.getMessage());
-        }
-        try {
-            contributorCrawler.fetchAndSaveContributors(owner, repo, project.getId(), 1);
-        } catch (Exception e) {
-            log.error("  拉取 contributors 失败 project={}: {}", fullName, e.getMessage());
-        }
+        log.info("[按需拉取] 开始拉取 commits: {}/{}", owner, repo);
+        int saved = commitCrawler.fetchAndSaveCommits(owner, repo, projectId);
 
-        try {
-            long commitTotal = commitCrawler.countByProject(project.getId());
-            List<Contributor> contribs = contributorCrawler.listByProject(project.getId());
-            projectCrawler.updateCounts(project, (int) commitTotal, contribs.size());
-        } catch (Exception e) {
-            log.warn("  更新项目计数失败 project={}: {}", fullName, e.getMessage());
-        }
+        long commitTotal = commitCrawler.countByProject(projectId);
+        project.setCommitsCount((int) commitTotal);
+        projectRepository.save(project);
+
+        log.info("[按需拉取] 完成: {}/{}, 共拉取 {} 条 commits", owner, repo, saved);
+        return saved;
     }
 
     /**
-     * 批量回填: 遍历所有项目, 对缺少 commits/contributors 的项目从 GitHub API 补齐
+     * 批量回填: 遍历所有项目, 对缺少 contributors 的项目从 GitHub API 补齐
+     * (commits 不再回填, 改为按需拉取)
      */
     public Map<String, Object> backfillAll(boolean force) {
         Map<String, Object> result = new LinkedHashMap<>();
@@ -138,7 +132,7 @@ public class CrawlerService {
         int skipped = 0;
         int failed = 0;
 
-        log.info("========== 批量回填开始 ==========");
+        log.info("========== 批量回填 contributors 开始 ==========");
         log.info("  项目总数: {}, 强制覆盖: {}", total, force);
         result.put("totalProjects", total);
         result.put("force", force);
@@ -158,17 +152,9 @@ public class CrawlerService {
             String owner = parts[0];
             String repo = parts[1];
 
-            boolean hasCommits = commitCrawler.hasCommits(project.getId());
             boolean hasContributors = contributorCrawler.hasContributors(project.getId());
 
             try {
-                if (force || !hasCommits) {
-                    if (force && hasCommits) commitCrawler.deleteByProject(project.getId());
-                    int saved = commitCrawler.fetchAndSaveCommits(owner, repo, project.getId(), 5);
-                    if (saved > 0) project.setCommitsCount(saved);
-                } else {
-                    log.info("  commits 已存在, 跳过");
-                }
                 if (force || !hasContributors) {
                     if (force && hasContributors) contributorCrawler.deleteByProject(project.getId());
                     contributorCrawler.fetchAndSaveContributors(owner, repo, project.getId(), 2);
@@ -179,8 +165,7 @@ public class CrawlerService {
                 }
                 projectRepository.save(project);
                 success++;
-                log.info("  ✅ 完成: {} (commits={}, contributors={})",
-                        fullName, project.getCommitsCount(), project.getContributorsCount());
+                log.info("  ✅ 完成: {} (contributors={})", fullName, project.getContributorsCount());
             } catch (Exception e) {
                 failed++;
                 log.error("  ❌ 失败 {}: {}", fullName, e.getMessage());
@@ -201,16 +186,15 @@ public class CrawlerService {
     }
 
     /**
-     * 增量回填: 只处理缺少 commits/contributors 的项目
+     * 增量回填: 只处理缺少 contributors 的项目 (commits 改为按需拉取)
      */
     public Map<String, Object> backfillMissing() {
         List<Project> allProjects = projectRepository.findAll();
         List<Project> missing = allProjects.stream()
-                .filter(p -> !commitCrawler.hasCommits(p.getId())
-                        || !contributorCrawler.hasContributors(p.getId()))
+                .filter(p -> !contributorCrawler.hasContributors(p.getId()))
                 .toList();
 
-        log.info("========== 增量回填: 共 {} 个项目缺失数据 ==========", missing.size());
+        log.info("========== 增量回填 contributors: 共 {} 个项目缺失数据 ==========", missing.size());
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("totalProjects", allProjects.size());
@@ -234,15 +218,9 @@ public class CrawlerService {
             String repo = parts[1];
 
             try {
-                if (!commitCrawler.hasCommits(project.getId())) {
-                    int saved = commitCrawler.fetchAndSaveCommits(owner, repo, project.getId(), 5);
-                    if (saved > 0) project.setCommitsCount(saved);
-                }
-                if (!contributorCrawler.hasContributors(project.getId())) {
-                    contributorCrawler.fetchAndSaveContributors(owner, repo, project.getId(), 2);
-                    List<Contributor> contribs = contributorCrawler.listByProject(project.getId());
-                    project.setContributorsCount(contribs.size());
-                }
+                contributorCrawler.fetchAndSaveContributors(owner, repo, project.getId(), 2);
+                List<Contributor> contribs = contributorCrawler.listByProject(project.getId());
+                project.setContributorsCount(contribs.size());
                 projectRepository.save(project);
                 success++;
             } catch (Exception e) {
@@ -259,25 +237,9 @@ public class CrawlerService {
 
     // ======================== 内部 ========================
 
-    /** 保存 Owner + Project, 新项目异步拉取 commits/contributors */
+    /** 保存 Owner + Project 元信息 (不拉取 commits, commits 改为按需拉取) */
     private void saveRepo(GitHubRepo repo, String language) {
-        // 1. Owner
         String ownerId = ownerCrawler.saveOwner(repo.owner()).getId();
-
-        // 2. Project (幂等 upsert)
-        ProjectCrawler.ProjectResult result = projectCrawler.saveOrUpdateProject(repo, ownerId, language);
-
-        // 3. 新项目异步拉取 commits & contributors
-        if (result.isNew()) {
-            final Project captured = result.project();
-            commitExecutor.submit(() -> {
-                try {
-                    saveRepoCommitsAndContributors(captured);
-                } catch (Exception e) {
-                    log.warn("  异步拉取 commits/contributors 失败 project={}: {}",
-                            captured.getFullName(), e.getMessage());
-                }
-            });
-        }
+        projectCrawler.saveOrUpdateProject(repo, ownerId, language);
     }
 }

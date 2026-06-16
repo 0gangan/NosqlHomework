@@ -111,9 +111,9 @@ public class GitHubApiClient {
     /**
      * 获取 commits 列表 (GET /repos/{owner}/{repo}/commits)
      */
-    public List<Map<String, Object>> listCommits(String owner, String repo, int page) {
+    public List<Map<String, Object>> listCommits(String owner, String repo, int page, int perPage) {
         return fetchList(
-                "https://api.github.com/repos/" + owner + "/" + repo + "/commits?per_page=100&page=" + page,
+                "https://api.github.com/repos/" + owner + "/" + repo + "/commits?per_page=" + perPage + "&page=" + page,
                 page, "commits");
     }
 

@@ -15,6 +15,11 @@ export function getProjectCommits(id, params) {
   return api.get(`/projects/${id}/commits`, { params })
 }
 
+// 按需拉取提交历史 (点击"查看Commit"按钮时调用)
+export function fetchProjectCommits(id) {
+  return api.post(`/projects/${id}/fetch-commits`)
+}
+
 // 获取项目贡献者
 export function getProjectContributors(id) {
   return api.get(`/projects/${id}/contributors`)
