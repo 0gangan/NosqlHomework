@@ -1,5 +1,6 @@
 package com.example.Nosql_Homework.crawler;
 
+import com.example.Nosql_Homework.crawler.config.CrawlerConfig;
 import com.example.Nosql_Homework.entity.Owner;
 import com.example.Nosql_Homework.entity.Project;
 import com.example.Nosql_Homework.entity.Commit;
@@ -22,7 +23,7 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ExecutorService;
 
 /**
  * GitHub API 采集服务
@@ -33,11 +34,13 @@ import java.util.concurrent.TimeUnit;
 @RequiredArgsConstructor
 public class CrawlerService {
 
+    private final CrawlerConfig crawlerConfig;
     private final RestTemplate restTemplate = createRestTemplate();
     private final ProjectRepository projectRepository;
     private final OwnerRepository ownerRepository;
     private final CommitRepository commitRepository;
     private final ContributorRepository contributorRepository;
+    private final ExecutorService commitExecutor;
 
     private static RestTemplate createRestTemplate() {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
@@ -57,12 +60,6 @@ public class CrawlerService {
 
     /** 每页拉取条数 (GitHub REST API 最大 100) */
     private static final int PER_PAGE = 30;
-
-    /** 限速间隔 (毫秒) */
-    private static final long RATE_LIMIT_MS = 2500;
-
-    /** GitHub 搜索 API 每 token 每分钟最多 30 次 */
-    private long lastCallTime = 0;
 
     /** 成功入库计数 (统计用) */
     private int totalSaved = 0;
@@ -92,7 +89,7 @@ public class CrawlerService {
             String pageUrl = baseUrl + "&page=" + page;
             try {
                 log.debug("  请求 page={} URL={}", page, pageUrl);
-                rateLimit();
+                crawlerConfig.rateLimit();
                 List<GitHubRepo> repos = fetchPage(pageUrl, page);
                 if (repos.isEmpty()) {
                     log.info("  page={} 返回空, 停止翻页", page);
@@ -127,21 +124,6 @@ public class CrawlerService {
     }
 
     // ======================== 内部 ========================
-
-    /** 简单限速：每次调用间隔至少 RATE_LIMIT_MS */
-    private void rateLimit() {
-        long now = System.currentTimeMillis();
-        long elapsed = now - lastCallTime;
-        long wait = RATE_LIMIT_MS - elapsed;
-        if (wait > 0) {
-            log.debug("  限速等待 {}ms (距上次调用 {}ms)", wait, elapsed);
-            try { TimeUnit.MILLISECONDS.sleep(wait); } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.warn("  限速等待被中断", e);
-            }
-        }
-        lastCallTime = System.currentTimeMillis();
-    }
 
     /** 调用 GitHub Search API */
     private List<GitHubRepo> fetchPage(String url, int page) {
@@ -289,13 +271,17 @@ public class CrawlerService {
         project.setCrawledAt(new Date());
         project = projectRepository.save(project);
 
-        // 新项目: 拉取 commits 和 contributors (异步, 不影响主流程)
+        // 新项目: 异步拉取 commits 和 contributors (线程池, 不阻塞主流程)
         if (isNew) {
-            try {
-                saveRepoCommitsAndContributors(project);
-            } catch (Exception e) {
-                log.warn("  拉取 commits/contributors 失败 project={}: {}", project.getFullName(), e.getMessage());
-            }
+            final Project capturedProject = project;
+            final String projectFullName = capturedProject.getFullName();
+            commitExecutor.submit(() -> {
+                try {
+                    saveRepoCommitsAndContributors(capturedProject);
+                } catch (Exception e) {
+                    log.warn("  异步拉取 commits/contributors 失败 project={}: {}", projectFullName, e.getMessage());
+                }
+            });
         }
     }
 
@@ -364,7 +350,7 @@ public class CrawlerService {
         for (int page = 1; page <= maxPages; page++) {
             String url = baseUrl + "&page=" + page;
             try {
-                rateLimit();
+                crawlerConfig.rateLimit();
                 HttpHeaders headers = new HttpHeaders();
                 headers.set("Accept", "application/vnd.github+json");
                 headers.set("X-GitHub-Api-Version", "2022-11-28");
@@ -417,7 +403,7 @@ public class CrawlerService {
         for (int page = 1; page <= maxPages; page++) {
             String url = baseUrl + "&page=" + page;
             try {
-                rateLimit();
+                crawlerConfig.rateLimit();
                 HttpHeaders headers = new HttpHeaders();
                 headers.set("Accept", "application/vnd.github+json");
                 headers.set("X-GitHub-Api-Version", "2022-11-28");
