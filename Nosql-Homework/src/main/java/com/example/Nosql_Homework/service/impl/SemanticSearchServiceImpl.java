@@ -236,8 +236,8 @@ public class SemanticSearchServiceImpl implements SemanticSearchService {
 
         // 策略 1: language + keywords + minStars 齐全
         if (parsed.language != null && parsed.keywords != null) {
-            log.info("[查询] 策略: 语言+关键词 → language={}, keywords={}, minStars={}, sort={}",
-                    parsed.language, parsed.keywords, parsed.minStars, parsed.sortBy);
+            log.info("[查询] 策略: 语言+关键词 → language={}, keywords={}, minStars={}, sort={}, category={}",
+                    parsed.language, parsed.keywords, parsed.minStars, parsed.sortBy, parsed.category);
 
             List<Project> results;
             if (parsed.minStars != null) {
@@ -265,50 +265,70 @@ public class SemanticSearchServiceImpl implements SemanticSearchService {
                         .limit(topK)
                         .collect(Collectors.toList());
             }
+            results = filterByCategory(results, parsed.category);
             log.info("[查询] 语言+关键词 最终结果 {} 条", results.size());
             return results;
         }
 
         // 策略 2: language + minStars (无关键词)
         if (parsed.language != null && parsed.minStars != null) {
-            log.info("[查询] 策略: 语言+最小星标 → language={}, minStars={}, sort={}",
-                    parsed.language, parsed.minStars, parsed.sortBy);
+            log.info("[查询] 策略: 语言+最小星标 → language={}, minStars={}, sort={}, category={}",
+                    parsed.language, parsed.minStars, parsed.sortBy, parsed.category);
             var page = projectRepository.findByLanguageAndStarsCountGreaterThan(
                     parsed.language, parsed.minStars, PageRequest.of(0, topK, sort));
             log.info("[查询] 命中 {} 条 (总数: {})", page.getContent().size(), page.getTotalElements());
-            return page.getContent();
+            List<Project> results = filterByCategory(page.getContent(), parsed.category);
+            log.info("[查询] 语言+最小星标 最终结果 {} 条", results.size());
+            return results;
         }
 
         // 策略 3: 仅 language (按 sort 排序)
         if (parsed.language != null) {
-            log.info("[查询] 策略: 仅语言 → language={}, sort={}", parsed.language, parsed.sortBy);
+            log.info("[查询] 策略: 仅语言 → language={}, sort={}, category={}",
+                    parsed.language, parsed.sortBy, parsed.category);
             var page = projectRepository.findByLanguage(parsed.language,
                     PageRequest.of(0, topK, sort));
             log.info("[查询] 命中 {} 条 (总数: {})", page.getContent().size(), page.getTotalElements());
-            return page.getContent();
+            List<Project> results = filterByCategory(page.getContent(), parsed.category);
+            log.info("[查询] 仅语言 最终结果 {} 条", results.size());
+            return results;
         }
 
         // 策略 4: 仅 keywords
         if (parsed.keywords != null) {
-            log.info("[查询] 策略: 仅关键词 → keywords={}, sort={}", parsed.keywords, parsed.sortBy);
+            log.info("[查询] 策略: 仅关键词 → keywords={}, sort={}, category={}",
+                    parsed.keywords, parsed.sortBy, parsed.category);
             var page = projectRepository
                     .findByDescriptionContainingIgnoreCaseOrNameContainingIgnoreCase(
                             parsed.keywords, parsed.keywords,
                             PageRequest.of(0, topK, sort));
             log.info("[查询] 命中 {} 条 (总数: {})", page.getContent().size(), page.getTotalElements());
-            return page.getContent();
+            List<Project> results = filterByCategory(page.getContent(), parsed.category);
+            log.info("[查询] 仅关键词 最终结果 {} 条", results.size());
+            return results;
         }
 
         // 策略 5: 仅 minStars (无语言/关键词)
         if (parsed.minStars != null) {
-            log.info("[查询] 策略: 仅最小星标 → minStars={}, sort={}", parsed.minStars, parsed.sortBy);
+            log.info("[查询] 策略: 仅最小星标 → minStars={}, sort={}, category={}",
+                    parsed.minStars, parsed.sortBy, parsed.category);
             var page = projectRepository.findByStarsCountGreaterThan(
                     parsed.minStars, PageRequest.of(0, topK, sort));
+            log.info("[查询] 命中 {} 条 (总数: {})", page.getContent().size(), page.getTotalElements());
+            List<Project> results = filterByCategory(page.getContent(), parsed.category);
+            log.info("[查询] 仅最小星标 最终结果 {} 条", results.size());
+            return results;
+        }
+
+        // 策略 6: 仅 category (新策略)
+        if (parsed.category != null) {
+            log.info("[查询] 策略: 仅品类 → category={}, sort={}", parsed.category, parsed.sortBy);
+            var page = projectRepository.findByCategory(parsed.category, PageRequest.of(0, topK, sort));
             log.info("[查询] 命中 {} 条 (总数: {})", page.getContent().size(), page.getTotalElements());
             return page.getContent();
         }
 
-        // 策略 6: 兜底 — 按 sort 排序全表
+        // 策略 7: 兜底 — 按 sort 排序全表
         log.info("[查询] 策略: 兜底 → sort={}, topK={}", parsed.sortBy, topK);
         var page = projectRepository.findAll(PageRequest.of(0, topK, sort));
         log.info("[查询] 命中 {} 条 (总数: {})", page.getContent().size(), page.getTotalElements());
@@ -344,6 +364,14 @@ public class SemanticSearchServiceImpl implements SemanticSearchService {
         String text = (p.getName() + " " + p.getDescription()).toLowerCase();
         return Arrays.stream(keywords.toLowerCase().split("\\s+"))
                 .anyMatch(text::contains);
+    }
+
+    /** 按品类过滤：category 为 null 时不过滤；"" 的项目不匹配任何品类查询 */
+    private List<Project> filterByCategory(List<Project> projects, String category) {
+        if (category == null || projects.isEmpty()) return projects;
+        return projects.stream()
+                .filter(p -> category.equalsIgnoreCase(p.getCategory()))
+                .collect(Collectors.toList());
     }
 
     // ======================== 内部类 ========================

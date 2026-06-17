@@ -5,6 +5,7 @@ import com.example.Nosql_Homework.crawler.crawler.ContributorCrawler;
 import com.example.Nosql_Homework.crawler.crawler.OwnerCrawler;
 import com.example.Nosql_Homework.crawler.crawler.ProjectCrawler;
 import com.example.Nosql_Homework.crawler.dto.GitHubRepo;
+import com.example.Nosql_Homework.crawler.util.CategoryClassifier;
 import com.example.Nosql_Homework.crawler.util.LanguageNormalizer;
 import com.example.Nosql_Homework.entity.Contributor;
 import com.example.Nosql_Homework.entity.Project;
@@ -232,6 +233,68 @@ public class CrawlerService {
         result.put("success", success);
         result.put("failed", failed);
         log.info("========== 增量回填结束: 成功{} 失败{} ==========", success, failed);
+        return result;
+    }
+
+    /**
+     * 回填项目分类: 遍历所有 category 为 null 的项目，用 CategoryClassifier 打标
+     * <ul>
+     *   <li>null → 尝试分类，命中则写分类名，否则写 ""</li>
+     *   <li>""  (empty) → 默认不重试，除非 force=true</li>
+     * </ul>
+     * @param force 是否对已标记为 "" 的项目重新尝试分类
+     * @return { total, classified, unclassified, retried }
+     */
+    public Map<String, Object> backfillCategories(boolean force) {
+        List<Project> nullProjects = projectRepository.findByCategoryIsNull();
+        int total = nullProjects.size();
+        int classified = 0;
+        int unclassified = 0;
+        int retried = 0;
+
+        log.info("========== 分类回填开始: null类项目={}, force={} ==========", total, force);
+
+        for (int i = 0; i < total; i++) {
+            Project p = nullProjects.get(i);
+            String category = CategoryClassifier.classify(p);
+            p.setCategory(category);
+            projectRepository.save(p);
+
+            if (CategoryClassifier.UNCLASSIFIED_EMPTY.equals(category)) {
+                unclassified++;
+            } else {
+                classified++;
+            }
+
+            if ((i + 1) % 50 == 0) {
+                log.info("  进度: {}/{} (已分类: {}, 未匹配: {})", i + 1, total, classified, unclassified);
+            }
+        }
+
+        // force 模式: 也对已标记为 "" 的项目重试
+        if (force) {
+            List<Project> emptyProjects = projectRepository.findAllByCategory(
+                    CategoryClassifier.UNCLASSIFIED_EMPTY);
+            log.info("  force模式: 重试 {} 个已标记为空的的项目", emptyProjects.size());
+            for (Project p : emptyProjects) {
+                String category = CategoryClassifier.classify(p);
+                if (!CategoryClassifier.UNCLASSIFIED_EMPTY.equals(category)) {
+                    p.setCategory(category);
+                    projectRepository.save(p);
+                    retried++;
+                    classified++;
+                }
+            }
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("total", total);
+        result.put("classified", classified);
+        result.put("unclassified", unclassified);
+        result.put("retried", retried);
+        result.put("force", force);
+        log.info("========== 分类回填结束: 总数={}, 已分类={}, 未匹配={}, 重试成功={} ==========",
+                total, classified, unclassified, retried);
         return result;
     }
 

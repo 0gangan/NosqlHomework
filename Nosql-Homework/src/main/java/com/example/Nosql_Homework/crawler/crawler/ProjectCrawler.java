@@ -1,6 +1,7 @@
 package com.example.Nosql_Homework.crawler.crawler;
 
 import com.example.Nosql_Homework.crawler.dto.GitHubRepo;
+import com.example.Nosql_Homework.crawler.util.CategoryClassifier;
 import com.example.Nosql_Homework.entity.Project;
 import com.example.Nosql_Homework.repository.ProjectRepository;
 import lombok.RequiredArgsConstructor;
@@ -61,10 +62,18 @@ public class ProjectCrawler {
                     .build();
         }
 
+        // 分类: 仅新项目 或 历史项目从未分类/上次未匹配成功时尝试
+        if (isNew || project.getCategory() == null
+                || CategoryClassifier.UNCLASSIFIED_EMPTY.equals(project.getCategory())) {
+            String category = CategoryClassifier.classify(project);
+            project.setCategory(category);
+        }
+
         project.setCrawledAt(new Date());
         project = projectRepository.save(project);
 
-        log.debug("  Project 已保存: fullName={}, isNew={}", project.getFullName(), isNew);
+        log.debug("  Project 已保存: fullName={}, category={}, isNew={}",
+                project.getFullName(), project.getCategory(), isNew);
         return new ProjectResult(project, isNew);
     }
 

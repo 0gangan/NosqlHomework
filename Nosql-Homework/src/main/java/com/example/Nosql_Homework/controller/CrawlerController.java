@@ -59,4 +59,16 @@ public class CrawlerController {
         Map<String, Object> result = crawlerService.normalizeAllProjectLanguages();
         return R.ok(result);
     }
+
+    /**
+     * 回填项目分类: 对 category 为 null 的项目用规则引擎打标
+     * POST /api/crawler/backfill-categories
+     * GET  /api/crawler/backfill-categories?force=true  对已标记为空串的重试
+     */
+    @PostMapping("/backfill-categories")
+    public R<Map<String, Object>> backfillCategories(
+            @RequestParam(defaultValue = "false") boolean force) {
+        Map<String, Object> result = crawlerService.backfillCategories(force);
+        return R.ok(result);
+    }
 }

@@ -27,4 +27,10 @@ public interface ProjectRepository extends MongoRepository<Project, String> {
     Page<Project> findByStarsCountGreaterThan(Integer minStars, Pageable pageable);
 
     Page<Project> findByDescriptionContainingIgnoreCaseOrNameContainingIgnoreCase(String descKeyword, String nameKeyword, Pageable pageable);
+
+    /** 查找从未分类的项目 (category == null) */
+    List<Project> findByCategoryIsNull();
+
+    /** 按品类精确查询 (不分页，用于回填等批量场景) */
+    List<Project> findAllByCategory(String category);
 }
