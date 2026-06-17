@@ -19,7 +19,13 @@
           </el-select>
         </el-form-item>
         <el-form-item label="分类">
-          <el-select v-model="filters.category" placeholder="全部分类" clearable style="width: 140px">
+          <el-select
+            v-model="filters.category"
+            placeholder="全部分类"
+            clearable
+            style="width: 140px"
+            popper-style="{ maxHeight: '280px' }"
+          >
             <el-option
               v-for="cat in categories"
               :key="cat.value"
@@ -67,9 +73,15 @@
           </template>
         </el-table-column>
         <el-table-column prop="description" label="描述" min-width="250" show-overflow-tooltip />
-        <el-table-column prop="language" label="语言" width="120">
+        <el-table-column prop="language" label="语言" width="100">
           <template #default="{ row }">
             <el-tag v-if="row.language" size="small">{{ row.language }}</el-tag>
+            <span v-else class="text-muted">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="品类" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.category" size="small" type="success">{{ categoryLabel(row.category) }}</el-tag>
             <span v-else class="text-muted">-</span>
           </template>
         </el-table-column>
@@ -145,12 +157,20 @@ const languages = [
 ]
 
 const categories = [
-  { label: 'Web 开发', value: 'Web' },
-  { label: '移动开发', value: 'Mobile' },
-  { label: '工具', value: 'Tool' },
-  { label: '基础设施', value: 'Infrastructure' },
-  { label: 'AI/ML', value: 'AI_ML' },
-  { label: '数据库', value: 'Database' }
+  { label: 'AI / 机器学习', value: 'ai' },
+  { label: 'Web 开发', value: 'web' },
+  { label: '移动开发', value: 'mobile' },
+  { label: '桌面应用', value: 'desktop' },
+  { label: '框架', value: 'framework' },
+  { label: '库 / SDK', value: 'library' },
+  { label: '命令行 CLI', value: 'cli' },
+  { label: 'API 服务', value: 'api' },
+  { label: '数据库', value: 'database' },
+  { label: 'DevOps', value: 'devops' },
+  { label: '安全', value: 'security' },
+  { label: '游戏', value: 'game' },
+  { label: '开发工具', value: 'tool' },
+  { label: '数据 / 分析', value: 'data' }
 ]
 
 function formatNumber(n) {
@@ -162,6 +182,11 @@ function formatNumber(n) {
 function formatDate(d) {
   if (!d) return '-'
   return new Date(d).toLocaleDateString('zh-CN')
+}
+
+function categoryLabel(value) {
+  const found = categories.find(c => c.value === value)
+  return found ? found.label : (value || '-')
 }
 
 async function search() {

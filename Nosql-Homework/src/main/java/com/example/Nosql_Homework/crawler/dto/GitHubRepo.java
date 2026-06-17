@@ -12,6 +12,7 @@ public record GitHubRepo(
         String language, int stargazersCount, int forksCount,
         int watchersCount, int openIssuesCount, int size,
         String defaultBranch, String createdAt, String updatedAt,
+        String pushedAt,
         Map<String, Object> owner, List<String> topics, Map<String, Object> license
 ) {
 
@@ -31,6 +32,7 @@ public record GitHubRepo(
                 (String) m.get("default_branch"),
                 (String) m.get("created_at"),
                 (String) m.get("updated_at"),
+                (String) m.get("pushed_at"),
                 (Map<String, Object>) m.get("owner"),
                 m.containsKey("topics") ? (List<String>) m.get("topics") : Collections.emptyList(),
                 (Map<String, Object>) m.get("license")

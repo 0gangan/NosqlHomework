@@ -41,6 +41,9 @@ public class ProjectCrawler {
             project.setWatchersCount(repo.watchersCount());
             project.setOpenIssuesCount(repo.openIssuesCount());
             project.setUpdatedAt(Date.from(Instant.parse(repo.updatedAt())));
+            if (repo.pushedAt() != null) {
+                project.setLastPushAt(Date.from(Instant.parse(repo.pushedAt())));
+            }
         } else {
             project = Project.builder()
                     .githubId(repo.id())
@@ -57,6 +60,8 @@ public class ProjectCrawler {
                     .openIssuesCount(repo.openIssuesCount())
                     .sizeKb(repo.size())
                     .defaultBranch(repo.defaultBranch())
+                    .lastPushAt(repo.pushedAt() != null
+                            ? Date.from(Instant.parse(repo.pushedAt())) : null)
                     .createdAt(Date.from(Instant.parse(repo.createdAt())))
                     .updatedAt(Date.from(Instant.parse(repo.updatedAt())))
                     .build();
