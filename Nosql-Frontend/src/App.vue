@@ -14,6 +14,7 @@
         <el-menu-item index="/">首页</el-menu-item>
         <el-menu-item index="/projects">项目浏览</el-menu-item>
         <el-menu-item index="/search">智能检索</el-menu-item>
+        <el-menu-item index="/agent">AI 问答</el-menu-item>
         <el-menu-item index="/history">检索历史</el-menu-item>
       </el-menu>
     </el-header>
@@ -36,6 +37,7 @@ const activeMenu = computed(() => {
   if (path.startsWith('/projects')) return '/projects'
   if (path.startsWith('/search')) return '/search'
   if (path.startsWith('/history')) return '/history'
+  if (path.startsWith('/agent')) return '/agent'
   return '/'
 })
 </script>

@@ -11,6 +11,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.TextCriteria;
+import org.springframework.data.mongodb.core.query.TextQuery;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -25,6 +28,7 @@ public class SemanticSearchServiceImpl implements SemanticSearchService {
 
     private final OpenAiChatModel chatModel;
     private final ProjectRepository projectRepository;
+    private final MongoTemplate mongoTemplate;
 
     /**
      * 修饰词黑名单：这些词是排序/过滤条件，不是内容搜索词
@@ -252,14 +256,10 @@ public class SemanticSearchServiceImpl implements SemanticSearchService {
                         .limit(topK)
                         .collect(Collectors.toList());
             } else {
-                // 无最小星标：关键词模糊匹配 + 语言过滤
-                var page = projectRepository
-                        .findByDescriptionContainingIgnoreCaseOrNameContainingIgnoreCase(
-                                parsed.keywords, parsed.keywords,
-                                PageRequest.of(0, topK * 2));
-                log.info("[查询] 关键词模糊查询命中 {} 条 (总数: {})",
-                        page.getContent().size(), page.getTotalElements());
-                results = page.getContent().stream()
+                // 无最小星标：text search + 语言过滤 + 重新排序
+                List<Project> candidates = textSearchProjects(parsed.keywords, topK * 3);
+                log.info("[查询] TextSearch 命中 {} 条", candidates.size());
+                results = candidates.stream()
                         .filter(p -> parsed.language.equalsIgnoreCase(p.getLanguage()))
                         .sorted(buildComparator(parsed.sortBy))
                         .limit(topK)
@@ -298,12 +298,14 @@ public class SemanticSearchServiceImpl implements SemanticSearchService {
         if (parsed.keywords != null) {
             log.info("[查询] 策略: 仅关键词 → keywords={}, sort={}, category={}",
                     parsed.keywords, parsed.sortBy, parsed.category);
-            var page = projectRepository
-                    .findByDescriptionContainingIgnoreCaseOrNameContainingIgnoreCase(
-                            parsed.keywords, parsed.keywords,
-                            PageRequest.of(0, topK, sort));
-            log.info("[查询] 命中 {} 条 (总数: {})", page.getContent().size(), page.getTotalElements());
-            List<Project> results = filterByCategory(page.getContent(), parsed.category);
+            // 如果还要按 category 过滤，多拉几倍数据留缓冲
+            int fetchSize = parsed.category != null ? topK * 3 : topK;
+            List<Project> candidates = textSearchProjects(parsed.keywords, fetchSize);
+            log.info("[查询] TextSearch 命中 {} 条", candidates.size());
+            List<Project> results = filterByCategory(candidates, parsed.category);
+            if (results.size() > topK) {
+                results = results.subList(0, topK);
+            }
             log.info("[查询] 仅关键词 最终结果 {} 条", results.size());
             return results;
         }
@@ -372,6 +374,28 @@ public class SemanticSearchServiceImpl implements SemanticSearchService {
         return projects.stream()
                 .filter(p -> category.equalsIgnoreCase(p.getCategory()))
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * MongoDB 文本搜索 — 自动分词 + 词干提取, "ui components" 也能匹配 "component"
+     * @return 按 text score 降序的结果列表
+     */
+    private List<Project> textSearchProjects(String keywords, int limit) {
+        try {
+            TextCriteria criteria = TextCriteria.forDefaultLanguage().matching(keywords);
+            org.springframework.data.mongodb.core.query.Query query = TextQuery
+                    .queryText(criteria)
+                    .sortByScore()
+                    .with(PageRequest.of(0, limit));
+            return mongoTemplate.find(query, Project.class);
+        } catch (Exception e) {
+            log.warn("[TextSearch] 失败, 回退到正则匹配: {}", e.getMessage());
+            // 兜底: 没有 text index 时走老逻辑
+            var page = projectRepository
+                    .findByDescriptionContainingIgnoreCaseOrNameContainingIgnoreCase(
+                            keywords, keywords, PageRequest.of(0, limit));
+            return page.getContent();
+        }
     }
 
     // ======================== 内部类 ========================

@@ -25,6 +25,11 @@ const routes = [
     path: '/history',
     name: 'SearchHistory',
     component: () => import('../views/SearchHistory.vue')
+  },
+  {
+    path: '/agent',
+    name: 'AgentPage',
+    component: () => import('../views/AgentPage.vue')
   }
 ]
 

@@ -18,6 +18,7 @@ public final class LanguageNormalizer {
      */
     private static final Map<String, String> SPECIAL_CASES = Map.ofEntries(
             // === 大小写特殊 ===
+            Map.entry("c", "C"),
             Map.entry("javascript", "JavaScript"),
             Map.entry("typescript", "TypeScript"),
             Map.entry("c++", "C++"),

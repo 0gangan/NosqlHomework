@@ -30,6 +30,7 @@ public class Project {
     @Field("github_id")
     private Long githubId;
 
+    @TextIndexed(weight = 3)
     private String name;
 
     @Field("full_name")
@@ -38,11 +39,12 @@ public class Project {
     @Field("owner_id")
     private String ownerId;
 
-    @TextIndexed
+    @TextIndexed(weight = 2)
     private String description;
 
     private String language;
 
+    @TextIndexed(weight = 1)
     private List<String> topics;
 
     private String license;
