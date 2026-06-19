@@ -4,8 +4,9 @@ import com.example.Nosql_Homework.common.R;
 import com.example.Nosql_Homework.entity.ChatMessage;
 import com.example.Nosql_Homework.entity.Project;
 import com.example.Nosql_Homework.repository.ProjectRepository;
-import com.example.Nosql_Homework.service.EmbeddingService;
-import com.example.Nosql_Homework.service.TigerRagService;
+import com.example.Nosql_Homework.service.impl.EmbeddingService;
+import com.example.Nosql_Homework.service.impl.TigerRagService;
+import com.example.Nosql_Homework.service.impl.VectorSearchService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -36,6 +37,7 @@ public class TigerRagController {
     private final ProjectRepository projectRepo;
     private final EmbeddingService embeddingService;
     private final MongoTemplate mongoTemplate;
+    private final VectorSearchService vectorSearchService;
 
     // ========== 对话相关 ==========
 
@@ -44,11 +46,22 @@ public class TigerRagController {
         if (req == null || req.query == null || req.query.isBlank()) {
             return R.fail("query 不能为空");
         }
-        TigerRagService.RagAnswer answer = tigerRagService.chat(req.sessionId, req.query.trim());
-        if (answer == null || !answer.isSuccess()) {
-            return R.fail(answer == null ? "未知错误" : answer.getErrorMsg());
+        try {
+            TigerRagService.RagAnswer answer = tigerRagService.chat(req.sessionId, req.query.trim(), req.topK, req.minScore);
+            if (answer == null || !answer.isSuccess()) {
+                return R.fail(answer == null ? "未知错误" : answer.getErrorMsg());
+            }
+            return R.ok(answer);
+        } catch (Exception e) {
+            Throwable root = e;
+            while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+            log.error("[Tiger-RAG] /chat 接口未捕获异常: 异常类型={}, 消息={}, rootCause={}, 消息={}, sessionId={}, topK={}, minScore={}, query=\"{}\"",
+                    e.getClass().getSimpleName(), e.getMessage(),
+                    root.getClass().getSimpleName(), root.getMessage(),
+                    req.sessionId, req.topK, req.minScore,
+                    req.query == null ? "" : req.query.length() > 120 ? req.query.substring(0, 120) + "..." : req.query, e);
+            return R.fail("服务异常: " + root.getClass().getSimpleName() + " - " + root.getMessage());
         }
-        return R.ok(answer);
     }
 
     @GetMapping("/history")
@@ -64,15 +77,34 @@ public class TigerRagController {
 
     @GetMapping("/info")
     public R<Map<String, Object>> info() {
-        Map<String, Object> info = new LinkedHashMap<>();
-        info.put("name", "Tiger-RAG");
-        info.put("description", "基于 MongoDB Atlas 向量检索 + 豆包大模型的 GitHub 项目智能问答系统");
-        info.put("vectorCollection", "projects");
-        info.put("vectorIndex", "tiger_projects_vector_index");
-        info.put("embeddingModel", embeddingService.getModelName());
-        info.put("totalProjects", projectRepo.count());
-        info.put("projectsMissingEmbedding", projectRepo.countByHasEmbeddingFalseOrHasEmbeddingIsNull());
-        return R.ok(info);
+        try {
+            Map<String, Object> info = new LinkedHashMap<>();
+            info.put("name", "Tiger-RAG");
+            info.put("description", "基于 MongoDB Atlas 向量检索 + 豆包大模型的 GitHub 项目智能问答系统");
+            info.put("vectorCollection", "projects");
+            info.put("vectorIndex", "tiger_projects_vector_index");
+            info.put("embeddingModel", embeddingService.getModelName());
+            info.put("totalProjects", projectRepo.count());
+            info.put("projectsMissingEmbedding", projectRepo.countByHasEmbeddingFalseOrHasEmbeddingIsNull());
+            // 同时把底层 "索引健康度" 一并返回，前端可以根据 ready=false 给出操作提示
+            info.put("index", vectorSearchService.indexHealth());
+            return R.ok(info);
+        } catch (Exception e) {
+            Throwable root = e;
+            while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+            log.error("[Tiger-RAG] /info 接口异常: 异常类型={}, 消息={}, rootCause={}, 消息={}",
+                    e.getClass().getSimpleName(), e.getMessage(),
+                    root.getClass().getSimpleName(), root.getMessage(), e);
+            return R.fail("获取信息失败: " + root.getMessage());
+        }
+    }
+
+    /**
+     * 轻量级诊断接口: 只返回 "当前向量库能否正常工作"，供前端在问答页 / 搜索页展示提示。
+     */
+    @GetMapping("/stats")
+    public R<Map<String, Object>> stats() {
+        return R.ok(vectorSearchService.indexHealth());
     }
 
     // ========== 向量库管理 ==========
@@ -89,64 +121,83 @@ public class TigerRagController {
         log.info("[Tiger-RAG] 开始为 projects 批量生成向量, batchSize={}, force={}", batchSize, force);
         long start = System.currentTimeMillis();
 
-        List<Project> missing;
-        if (Boolean.TRUE.equals(force)) {
-            missing = projectRepo.findAll();
-        } else {
-            missing = projectRepo.findByHasEmbeddingFalseOrHasEmbeddingIsNull();
-        }
-        if (missing.isEmpty()) {
-            Map<String, Object> result = new LinkedHashMap<>();
-            result.put("generated", 0);
-            result.put("total", projectRepo.count());
-            result.put("remaining", 0);
-            result.put("message", "没有需要生成向量的项目");
-            result.put("costMs", 0);
-            return R.ok(result);
-        }
-
-        // 分批生成
-        int totalMissing = missing.size();
-        int processed = 0;
-        int ok = 0;
-
-        for (int i = 0; i < totalMissing; i += batchSize) {
-            int end = Math.min(i + batchSize, totalMissing);
-            List<Project> batch = missing.subList(i, end);
-
-            // 构造每个项目的 embedding 文本
-            List<String> texts = new ArrayList<>(batch.size());
-            for (Project p : batch) texts.add(p.toEmbeddingText());
-
-            try {
-                List<List<Float>> vectors = embeddingService.embedBatch(texts);
-                for (int j = 0; j < batch.size(); j++) {
-                    Project p = batch.get(j);
-                    List<Float> v = j < vectors.size() ? vectors.get(j) : null;
-                    if (v == null || v.isEmpty()) continue;
-
-                    Update update = new Update()
-                            .set("embedding", v)
-                            .set("embedding_model", embeddingService.getModelName())
-                            .set("has_embedding", true);
-                    mongoTemplate.updateFirst(Query.query(where("_id").is(p.getId())), update, Project.class);
-                    ok++;
-                }
-                processed += batch.size();
-                log.info("[Tiger-RAG] 进度 {}/{}, 当前批成功 {}", processed, totalMissing, ok);
-            } catch (Exception e) {
-                log.error("[Tiger-RAG] 批 {} 生成向量失败: {}", i / batchSize, e.getMessage(), e);
+        try {
+            List<Project> missing;
+            if (Boolean.TRUE.equals(force)) {
+                missing = projectRepo.findAll();
+            } else {
+                missing = projectRepo.findByHasEmbeddingFalseOrHasEmbeddingIsNull();
             }
-        }
+            if (missing.isEmpty()) {
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("generated", 0);
+                result.put("total", projectRepo.count());
+                result.put("remaining", 0);
+                result.put("message", "没有需要生成向量的项目");
+                result.put("costMs", 0);
+                return R.ok(result);
+            }
 
-        long cost = System.currentTimeMillis() - start;
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("generated", ok);
-        result.put("total", projectRepo.count());
-        result.put("remaining", projectRepo.countByHasEmbeddingFalseOrHasEmbeddingIsNull());
-        result.put("costMs", cost);
-        log.info("[Tiger-RAG] 向量补全完成, 成功 {}, 耗时 {} ms", ok, cost);
-        return R.ok(result);
+            // 分批生成
+            int totalMissing = missing.size();
+            int processed = 0;
+            int ok = 0;
+
+            for (int i = 0; i < totalMissing; i += batchSize) {
+                int end = Math.min(i + batchSize, totalMissing);
+                List<Project> batch = missing.subList(i, end);
+
+                // 构造每个项目的 embedding 文本
+                List<String> texts = new ArrayList<>(batch.size());
+                for (Project p : batch) texts.add(p.toEmbeddingText());
+
+                try {
+                    List<List<Float>> vectors = embeddingService.embedBatch(texts);
+                    for (int j = 0; j < batch.size(); j++) {
+                        Project p = batch.get(j);
+                        List<Float> v = j < vectors.size() ? vectors.get(j) : null;
+                        if (v == null || v.isEmpty()) continue;
+
+                        p.setEmbedding(v);
+                        p.setEmbeddingModel(embeddingService.getModelName());
+                        p.setHasEmbedding(true);
+                        projectRepo.save(p);
+                        ok++;
+                    }
+                    processed += batch.size();
+                    log.info("[Tiger-RAG] 进度 {}/{}, 当前批成功 {}", processed, totalMissing, ok);
+                } catch (Exception e) {
+                    Throwable root = e;
+                    while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+                    log.error("[Tiger-RAG] batch-embed 批 {} 失败: 异常类型={}, 消息={}, rootCause={}, 消息={}, 批项目数={}",
+                            i / batchSize + 1,
+                            e.getClass().getSimpleName(), e.getMessage(),
+                            root.getClass().getSimpleName(), root.getMessage(),
+                            batch.size(), e);
+                }
+            }
+
+            long cost = System.currentTimeMillis() - start;
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("generated", ok);
+            result.put("total", projectRepo.count());
+            result.put("remaining", projectRepo.countByHasEmbeddingFalseOrHasEmbeddingIsNull());
+            result.put("costMs", cost);
+            log.info("[Tiger-RAG] 向量补全完成, 成功 {}, 耗时 {} ms", ok, cost);
+            return R.ok(result);
+        } catch (Exception e) {
+            long cost = System.currentTimeMillis() - start;
+            Throwable root = e;
+            while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+            log.error("[Tiger-RAG] batch-embed 顶层异常: 异常类型={}, 消息={}, rootCause={}, 消息={}, 耗时={}ms",
+                    e.getClass().getSimpleName(), e.getMessage(),
+                    root.getClass().getSimpleName(), root.getMessage(),
+                    cost, e);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("error", root.getClass().getSimpleName() + ": " + root.getMessage());
+            result.put("costMs", cost);
+            return R.fail("批量生成向量失败: " + root.getMessage());
+        }
     }
 
     // ========== DTO ==========

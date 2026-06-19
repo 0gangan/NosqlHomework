@@ -94,7 +94,7 @@ public class Project {
 
     // ========== Tiger-RAG 向量数据库字段 (MongoDB Atlas Vector Search) ==========
 
-    /** 内容向量（由豆包 Embedding 生成，1024 维） */
+    /** 内容向量（由通义千问 DashScope Embedding 生成，1024 维） */
     @Field("embedding")
     private List<Float> embedding;
 

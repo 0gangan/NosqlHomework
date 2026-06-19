@@ -4,6 +4,7 @@ import com.example.Nosql_Homework.entity.Owner;
 import com.example.Nosql_Homework.entity.Project;
 import com.example.Nosql_Homework.repository.OwnerRepository;
 import com.example.Nosql_Homework.repository.ProjectRepository;
+import com.example.Nosql_Homework.service.impl.EmbeddingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -32,6 +33,7 @@ public class CrawlerService {
     private final RestTemplate restTemplate = createRestTemplate();
     private final ProjectRepository projectRepository;
     private final OwnerRepository ownerRepository;
+    private final EmbeddingService embeddingService;
 
     private static RestTemplate createRestTemplate() {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
@@ -277,10 +279,29 @@ public class CrawlerService {
                     .defaultBranch(repo.defaultBranch)
                     .createdAt(Date.from(Instant.parse(repo.createdAt)))
                     .updatedAt(Date.from(Instant.parse(repo.updatedAt)))
+                    .hasEmbedding(false)
                     .build();
         }
         project.setCrawledAt(new Date());
         projectRepository.save(project);
+
+        // ===== Tiger-RAG: 自动为项目生成 embedding 向量 =====
+        try {
+            String embedText = project.toEmbeddingText();
+            java.util.List<Float> vec = embeddingService.embed(embedText);
+            if (vec != null && !vec.isEmpty()) {
+                project.setEmbedding(vec);
+                project.setEmbeddingModel(embeddingService.getModelName());
+                project.setHasEmbedding(true);
+                projectRepository.save(project);
+                log.debug("  [Tiger-RAG] 项目 {} 向量生成成功, 维度={}", project.getName(), vec.size());
+            } else {
+                log.warn("  [Tiger-RAG] 项目 {} 向量生成失败 (返回空)", project.getName());
+            }
+        } catch (Exception e) {
+            log.warn("  [Tiger-RAG] 项目 {} 向量生成异常: {} - {}, 已标记 hasEmbedding=false, 可通过 batch-embed 接口补全",
+                    project.getName(), e.getClass().getSimpleName(), e.getMessage());
+        }
     }
 
     /** 设置 Token 认证头 */

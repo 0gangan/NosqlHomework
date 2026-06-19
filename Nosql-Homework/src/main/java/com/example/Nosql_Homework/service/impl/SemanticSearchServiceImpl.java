@@ -96,8 +96,8 @@ public class SemanticSearchServiceImpl implements SemanticSearchService {
 
         log.info("[LLM] 发送 Prompt (长度={} chars): {}", prompt.length(), prompt);
 
+        long startTime = System.currentTimeMillis();
         try {
-            long startTime = System.currentTimeMillis();
             String response = chatModel.generate(prompt);
             long costMs = System.currentTimeMillis() - startTime;
 
@@ -110,7 +110,13 @@ public class SemanticSearchServiceImpl implements SemanticSearchService {
 
             return result;
         } catch (Exception e) {
-            log.error("[LLM] 调用失败 → 使用关键词兜底策略", e);
+            long cost = System.currentTimeMillis() - startTime;
+            Throwable root = e;
+            while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+            log.error("[LLM] 意图解析失败: 异常类型={}, 消息={}, rootCause={}, 消息={}, Prompt长度={}, 耗时={}ms → 使用关键词兜底策略",
+                    e.getClass().getSimpleName(), e.getMessage(),
+                    root.getClass().getSimpleName(), root.getMessage(),
+                    prompt.length(), cost, e);
             ParsedIntent fallback = fallbackParse(query);
             log.info("[LLM] 兜底解析: intent={}, keywords={}", fallback.intent, fallback.keywords);
             return fallback;

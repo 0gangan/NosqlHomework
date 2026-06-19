@@ -10,6 +10,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/projects")
@@ -64,5 +65,37 @@ public class ProjectController {
     public R<Void> delete(@PathVariable String id) {
         projectService.deleteById(id);
         return R.ok();
+    }
+
+    // ============ Tiger-RAG: 向量补全 ============
+
+    /**
+     * 查看项目集合的 embedding 统计（有多少项目已经向量化）
+     */
+    @GetMapping("/embedding-stats")
+    public R<Map<String, Object>> embeddingStats() {
+        return R.ok(projectService.embedStats());
+    }
+
+    /**
+     * 为单个项目生成 / 重新生成向量
+     * POST /api/projects/{id}/embed?force=false
+     */
+    @PostMapping("/{id}/embed")
+    public R<Map<String, Object>> embedOne(@PathVariable String id,
+                                           @RequestParam(defaultValue = "false") boolean force) {
+        boolean ok = projectService.embedProject(id, force);
+        return ok ? R.ok(Map.of("id", id, "force", force, "message", "已为该项目生成向量"))
+                  : R.fail(500, "生成向量失败，请检查日志");
+    }
+
+    /**
+     * 为所有尚未生成向量的项目批量生成 embedding（后台异步执行）
+     * POST /api/projects/batch-embed?force=false&batchSize=20
+     */
+    @PostMapping("/batch-embed")
+    public R<Map<String, Object>> batchEmbed(@RequestParam(defaultValue = "20") int batchSize,
+                                             @RequestParam(defaultValue = "false") boolean force) {
+        return R.ok(projectService.startBatchEmbed(batchSize, force));
     }
 }
