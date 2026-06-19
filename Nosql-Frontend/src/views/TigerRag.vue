@@ -123,7 +123,12 @@
               </div>
 
               <div v-if="msg.role === 'assistant' && msg.durationMs" class="msg-meta">
-                耗时 {{ msg.durationMs }} ms · {{ msg.usedKnowledge === false ? '未命中知识库' : '已检索知识库' }}
+                耗时 {{ msg.durationMs }} ms ·
+                <span v-if="msg.knowledgeSource === 'structured'">精确查询 (数据库)</span>
+                <span v-else-if="msg.knowledgeSource === 'rag'">项目知识库 (最高相似度 {{ msg.highestScore && msg.highestScore.toFixed(2) }})</span>
+                <span v-else-if="msg.knowledgeSource === 'hybrid'">混合模式 (最高相似度 {{ msg.highestScore && msg.highestScore.toFixed(2) }}, 已结合通用知识)</span>
+                <span v-else-if="msg.knowledgeSource === 'llm'">通用知识 (LLM)</span>
+                <span v-else>{{ msg.usedKnowledge === false ? '未命中知识库' : '已检索知识库' }}</span>
               </div>
             </div>
           </div>
@@ -170,7 +175,7 @@ import { ElMessage } from 'element-plus'
 import {
   MagicStick, ChatDotRound, Document, Plus, Delete, Promotion, InfoFilled
 } from '@element-plus/icons-vue'
-import { tigerRagChat, tigerRagClearSession } from '../api/tigerRag'
+import { tigerRagChat, tigerRagStartChat, tigerRagGetTask, tigerRagClearSession } from '../api/tigerRag'
 
 // ===== 会话状态 =====
 // 会话列表：存 localStorage，可切换
@@ -290,19 +295,55 @@ async function sendMessage() {
   sending.value = true
 
   // 空的"正在输入"气泡
-  const assistantMsg = { role: 'assistant', content: '', refs: [], usedKnowledge: null, durationMs: null }
+  const assistantMsg = { role: 'assistant', content: '', refs: [], usedKnowledge: null, durationMs: null, knowledgeSource: null }
   messages.value.push(assistantMsg)
 
   await nextTick()
   scrollToBottom()
 
   try {
-    const result = await tigerRagChat({ sessionId: currentSessionId.value, query: q })
+    // 1) 先发一次 /chat/start，立刻拿到 taskId
+    const startResp = await tigerRagStartChat({ sessionId: currentSessionId.value, query: q })
+    const taskId = startResp.taskId
+    assistantMsg.content = '正在思考中，请稍候…（0s）'
+
+    // 2) 轮询查询任务结果，最多 2 分钟
+    const MAX_WAIT_MS = 120 * 1000
+    const POLL_INTERVAL_MS = 2000
+    const startTime = Date.now()
+    let result = null
+
+    while (Date.now() - startTime < MAX_WAIT_MS) {
+      const poll = await tigerRagGetTask(taskId)
+      const status = poll && poll.status ? poll.status : (poll && poll.answer ? 'completed' : 'processing')
+
+      if (status === 'completed') {
+        result = poll.answer || poll
+        break
+      }
+      if (status === 'failed' || status === 'expired') {
+        throw new Error(poll.errorMsg || '任务失败，请重试')
+      }
+
+      // 还在处理：更新气泡提示，让用户知道已等待多久
+      const elapsedSec = Math.round((Date.now() - startTime) / 1000)
+      assistantMsg.content = '正在思考中，请稍候…（' + elapsedSec + 's）'
+      await nextTick()
+      scrollToBottom()
+
+      await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS))
+    }
+
+    if (!result) {
+      throw new Error('等待超时，请重试')
+    }
 
     assistantMsg.content = result.answer
     assistantMsg.refs = result.refs || []
     assistantMsg.usedKnowledge = result.usedKnowledge
+    assistantMsg.knowledgeSource = result.knowledgeSource
     assistantMsg.durationMs = result.durationMs
+
     // 更新 session title（用首条用户消息的前 20 字当标题）
     const cur = sessions.value.find(s => s.id === currentSessionId.value)
     if (cur && cur.title && cur.title.startsWith('新对话')) {

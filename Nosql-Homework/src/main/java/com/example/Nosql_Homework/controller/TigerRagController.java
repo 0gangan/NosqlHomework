@@ -64,6 +64,47 @@ public class TigerRagController {
         }
     }
 
+    /**
+     * 异步发起问答：立刻返回 taskId，前端通过 GET /chat/{taskId} 轮询结果。
+     * 适合 LLM 耗时较长（>15秒）的场景，避免前端 axios 超时。
+     */
+    @PostMapping("/chat/start")
+    public R<TigerRagService.ChatTask> startChat(@RequestBody ChatRequest req) {
+        if (req == null || req.query == null || req.query.isBlank()) {
+            return R.fail("query 不能为空");
+        }
+        try {
+            TigerRagService.ChatTask task = tigerRagService.startChat(req.sessionId, req.query.trim(), req.topK, req.minScore);
+            log.info("[Tiger-RAG] /chat/start -> taskId={}, query={}", task.getTaskId(), truncate(req.query, 80));
+            return R.ok(task);
+        } catch (Exception e) {
+            Throwable root = e;
+            while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+            log.error("[Tiger-RAG] /chat/start 接口未捕获异常: 异常类型={}, 消息={}, rootCause={}, 消息={}, sessionId={}, query=\"{}\"",
+                    e.getClass().getSimpleName(), e.getMessage(),
+                    root.getClass().getSimpleName(), root.getMessage(),
+                    req.sessionId,
+                    req.query == null ? "" : req.query.length() > 120 ? req.query.substring(0, 120) + "..." : req.query, e);
+            return R.fail("服务异常: " + root.getClass().getSimpleName() + " - " + root.getMessage());
+        }
+    }
+
+    /** 轮询查询任务状态与结果 */
+    @GetMapping("/chat/{taskId}")
+    public R<TigerRagService.ChatTask> getChatTask(@PathVariable String taskId) {
+        if (taskId == null || taskId.isBlank()) return R.fail("taskId 不能为空");
+        TigerRagService.ChatTask task = tigerRagService.getTaskResult(taskId);
+        if (task == null) {
+            return R.fail("任务不存在或已过期 (仅保留 10 分钟)");
+        }
+        return R.ok(task);
+    }
+
+    private static String truncate(String s, int n) {
+        if (s == null) return "";
+        return s.length() <= n ? s : s.substring(0, n) + "...";
+    }
+
     @GetMapping("/history")
     public R<List<ChatMessage>> history(@RequestParam String sessionId) {
         return R.ok(tigerRagService.listHistory(sessionId));
@@ -206,5 +247,7 @@ public class TigerRagController {
     public static class ChatRequest {
         private String sessionId;
         private String query;
+        private Integer topK;
+        private Double minScore;
     }
 }
