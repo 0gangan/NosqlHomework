@@ -1,6 +1,8 @@
 package com.example.Nosql_Homework.config;
 
 import dev.langchain4j.model.openai.OpenAiChatModel;
+import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
+import dev.langchain4j.model.embedding.EmbeddingModel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -12,6 +14,7 @@ import java.time.Duration;
 @Configuration
 public class LangChainConfig {
 
+    // ======= Chat LLM =======
     @Value("${langchain4j.openai.api-key}")
     private String apiKey;
 
@@ -30,10 +33,32 @@ public class LangChainConfig {
     @Value("${langchain4j.openai.timeout-seconds}")
     private Integer timeoutSeconds;
 
+    @Value("${langchain4j.openai.max-retries:3}")
+    private Integer chatMaxRetries;
+
+    // ======= Embedding Model =======
+    @Value("${tiger.rag.embedding.model-name}")
+    private String embeddingModelName;
+
+    @Value("${tiger.rag.embedding.dimensions}")
+    private Integer embeddingDimensions;
+
+    @Value("${tiger.rag.embedding.api-key}")
+    private String embeddingApiKey;
+
+    @Value("${tiger.rag.embedding.base-url}")
+    private String embeddingBaseUrl;
+
+    @Value("${tiger.rag.embedding.timeout-seconds:60}")
+    private Integer embeddingTimeoutSeconds;
+
+    @Value("${tiger.rag.embedding.max-retries:3}")
+    private Integer embeddingMaxRetries;
+
     @Bean
     public OpenAiChatModel chatLanguageModel() {
-        log.info("初始化 LLM: baseUrl={}, model={}, temperature={}, maxTokens={}, timeout={}s",
-                baseUrl, modelName, temperature, maxTokens, timeoutSeconds);
+        log.info("[LangChainConfig] init Chat LLM: baseUrl={}, model={}, temp={}, maxTokens={}, timeout={}s, maxRetries={}",
+                baseUrl, modelName, temperature, maxTokens, timeoutSeconds, chatMaxRetries);
 
         OpenAiChatModel model = OpenAiChatModel.builder()
                 .apiKey(apiKey)
@@ -42,9 +67,32 @@ public class LangChainConfig {
                 .temperature(temperature)
                 .maxTokens(maxTokens)
                 .timeout(Duration.ofSeconds(timeoutSeconds))
+                .maxRetries(chatMaxRetries)
+                .logRequests(true)
+                .logResponses(true)
                 .build();
 
-        log.info("LLM 初始化完成: modelName={}, apiKey 已配置={}", modelName, apiKey != null && !apiKey.isBlank() && !"unset".equals(apiKey));
+        log.info("[LangChainConfig] Chat LLM ready: model={}", modelName);
+        return model;
+    }
+
+    @Bean
+    public EmbeddingModel embeddingModel() {
+        log.info("[LangChainConfig] init Embedding: baseUrl={}, model={}, dim={}, timeout={}s, maxRetries={}",
+                embeddingBaseUrl, embeddingModelName, embeddingDimensions, embeddingTimeoutSeconds, embeddingMaxRetries);
+
+        EmbeddingModel model = OpenAiEmbeddingModel.builder()
+                .apiKey(embeddingApiKey)
+                .baseUrl(embeddingBaseUrl)
+                .modelName(embeddingModelName)
+                .dimensions(embeddingDimensions)
+                .timeout(Duration.ofSeconds(embeddingTimeoutSeconds))
+                .maxRetries(embeddingMaxRetries)
+                .logRequests(true)
+                .logResponses(true)
+                .build();
+
+        log.info("[LangChainConfig] Embedding ready: model={}", embeddingModelName);
         return model;
     }
 }
