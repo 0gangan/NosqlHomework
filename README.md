@@ -21,6 +21,9 @@ MONGO_URI=mongodb://xxxxxxx
 # LLM API Key
 LLM_API_KEY=sk-xxxxxxxx
 
+# Embedding API Key (阿里 DashScope text-embedding-v4)
+tiger.rag.embedding.api-key=sk-ws-xxxxxxx
+
 # GitHub Token（多个用逗号分隔）
 GITHUB_TOKENS=ghp_xxxxxxxx
 ```
