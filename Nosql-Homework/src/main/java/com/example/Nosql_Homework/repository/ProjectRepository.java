@@ -31,4 +31,10 @@ public interface ProjectRepository extends MongoRepository<Project, String> {
 
     /** Tiger-RAG: 尚未生成向量的项目数量 */
     long countByHasEmbeddingFalseOrHasEmbeddingIsNull();
+
+    /** 分类回填: category 为 null 的项目 */
+    List<Project> findByCategoryIsNull();
+
+    /** 分类回填: 按 category 查找项目 */
+    List<Project> findAllByCategory(String category);
 }

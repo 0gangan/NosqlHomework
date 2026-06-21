@@ -68,6 +68,24 @@ public class ProjectServiceImpl implements ProjectService {
         projectRepository.deleteById(id);
     }
 
+    @Override
+    public List<Map<String, Object>> getLanguageStats() {
+        return projectRepository.findAll().stream()
+                .collect(java.util.stream.Collectors.groupingBy(
+                        p -> p.getLanguage() == null ? "Unknown" : p.getLanguage(),
+                        java.util.stream.Collectors.counting()
+                ))
+                .entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .map(e -> {
+                    Map<String, Object> m = new java.util.HashMap<>();
+                    m.put("language", e.getKey());
+                    m.put("count", e.getValue());
+                    return m;
+                })
+                .collect(java.util.stream.Collectors.toList());
+    }
+
     // ============ Tiger-RAG 向量补全 ============
 
     @Override

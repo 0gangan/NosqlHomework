@@ -8,6 +8,7 @@ import com.example.Nosql_Homework.crawler.dto.GitHubRepo;
 import com.example.Nosql_Homework.crawler.util.CategoryClassifier;
 import com.example.Nosql_Homework.crawler.util.LanguageNormalizer;
 import com.example.Nosql_Homework.entity.Contributor;
+import com.example.Nosql_Homework.entity.Owner;
 import com.example.Nosql_Homework.entity.Project;
 import com.example.Nosql_Homework.repository.OwnerRepository;
 import com.example.Nosql_Homework.repository.ProjectRepository;
@@ -24,6 +25,9 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 
+import java.time.Instant;
+import java.util.Collections;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -259,38 +263,6 @@ public class CrawlerService {
         result.put("failed", failed);
         log.info("========== 增量回填结束: 成功{} 失败{} ==========", success, failed);
         return result;
-            List<GitHubRepo> repos = new ArrayList<>();
-            for (Map<String, Object> item : items) {
-                try {
-                    repos.add(GitHubRepo.fromMap(item));
-                } catch (Exception e) {
-                    log.error("  page={} 解析单条repo失败: id={}, error={}",
-                            page, item.get("id"), e.getMessage(), e);
-                }
-            }
-            return repos;
-        } catch (ResourceAccessException e) {
-            long elapsed = System.currentTimeMillis() - startTime;
-            log.error("  page={} 网络连接失败 (耗时{}ms)", page, elapsed);
-            log.error("  目标 URL: {}", url);
-            log.error("  原始异常: {} - {}", e.getClass().getSimpleName(), e.getMessage());
-            if (e.getCause() != null) {
-                log.error("  根因: {} - {}", e.getCause().getClass().getSimpleName(), e.getCause().getMessage());
-            }
-            log.error("  提示: 请检查网络连接/代理/VPN 是否正常", e);
-            throw e;
-        } catch (HttpStatusCodeException e) {
-            long elapsed = System.currentTimeMillis() - startTime;
-            log.error("  page={} HTTP错误 (耗时{}ms): status={}", page, elapsed, e.getStatusCode());
-            log.error("  响应体: {}", e.getResponseBodyAsString());
-            logRateLimitHeaders(e.getResponseHeaders());
-            throw e;
-        } catch (RestClientException e) {
-            long elapsed = System.currentTimeMillis() - startTime;
-            log.error("  page={} 请求异常 (耗时{}ms): {} - {}",
-                    page, elapsed, e.getClass().getSimpleName(), e.getMessage(), e);
-            throw e;
-        }
     }
 
     /** 打印 Rate Limit 相关响应头 */
@@ -310,7 +282,7 @@ public class CrawlerService {
     /** 保存项目与 Owner 到 MongoDB */
     private void saveRepo(GitHubRepo repo, String defaultLanguage) {
         // Owner
-        Map<String, Object> ownerMap = repo.owner;
+        Map<String, Object> ownerMap = repo.owner();
         long ownerId = ((Number) ownerMap.get("id")).longValue();
         Owner owner = ownerRepository.findByGithubId(ownerId).orElseGet(() -> Owner.builder()
                 .githubId(ownerId)
@@ -324,34 +296,34 @@ public class CrawlerService {
         owner = ownerRepository.save(owner);
 
         // Project (幂等: 按 github_id upsert)
-        Project existing = projectRepository.findByGithubId(repo.id).orElse(null);
+        Project existing = projectRepository.findByGithubId(repo.id()).orElse(null);
         Project project;
         if (existing != null) {
             project = existing;
             // 只更新变化字段
-            project.setStarsCount(repo.stargazersCount);
-            project.setForksCount(repo.forksCount);
-            project.setWatchersCount(repo.watchersCount);
-            project.setOpenIssuesCount(repo.openIssuesCount);
-            project.setUpdatedAt(Date.from(Instant.parse(repo.updatedAt)));
+            project.setStarsCount(repo.stargazersCount());
+            project.setForksCount(repo.forksCount());
+            project.setWatchersCount(repo.watchersCount());
+            project.setOpenIssuesCount(repo.openIssuesCount());
+            project.setUpdatedAt(Date.from(Instant.parse(repo.updatedAt())));
         } else {
             project = Project.builder()
-                    .githubId(repo.id)
-                    .name(repo.name)
-                    .fullName(repo.fullName)
+                    .githubId(repo.id())
+                    .name(repo.name())
+                    .fullName(repo.fullName())
                     .ownerId(owner.getId())
-                    .description(repo.description)
+                    .description(repo.description())
                     .language(defaultLanguage)
-                    .topics(repo.topics)
-                    .license(repo.license != null ? (String) repo.license.get("spdx_id") : null)
-                    .starsCount(repo.stargazersCount)
-                    .forksCount(repo.forksCount)
-                    .watchersCount(repo.watchersCount)
-                    .openIssuesCount(repo.openIssuesCount)
-                    .sizeKb(repo.size)
-                    .defaultBranch(repo.defaultBranch)
-                    .createdAt(Date.from(Instant.parse(repo.createdAt)))
-                    .updatedAt(Date.from(Instant.parse(repo.updatedAt)))
+                    .topics(repo.topics())
+                    .license(repo.license() != null ? (String) repo.license().get("spdx_id") : null)
+                    .starsCount(repo.stargazersCount())
+                    .forksCount(repo.forksCount())
+                    .watchersCount(repo.watchersCount())
+                    .openIssuesCount(repo.openIssuesCount())
+                    .sizeKb(repo.size())
+                    .defaultBranch(repo.defaultBranch())
+                    .createdAt(Date.from(Instant.parse(repo.createdAt())))
+                    .updatedAt(Date.from(Instant.parse(repo.updatedAt())))
                     .hasEmbedding(false)
                     .build();
         }
@@ -428,67 +400,6 @@ public class CrawlerService {
             }
         }
 
-    @SuppressWarnings("unchecked")
-    private static class GitHubRepo {
-        final long id;
-        final String name;
-        final String fullName;
-        final String description;
-        final String language;
-        final int stargazersCount;
-        final int forksCount;
-        final int watchersCount;
-        final int openIssuesCount;
-        final int size;
-        final String defaultBranch;
-        final String createdAt;
-        final String updatedAt;
-        final Map<String, Object> owner;
-        final List<String> topics;
-        final Map<String, Object> license;
-
-        GitHubRepo(long id, String name, String fullName, String description,
-                   String language, int stargazersCount, int forksCount,
-                   int watchersCount, int openIssuesCount, int size,
-                   String defaultBranch, String createdAt, String updatedAt,
-                   Map<String, Object> owner, List<String> topics, Map<String, Object> license) {
-            this.id = id;
-            this.name = name;
-            this.fullName = fullName;
-            this.description = description;
-            this.language = language;
-            this.stargazersCount = stargazersCount;
-            this.forksCount = forksCount;
-            this.watchersCount = watchersCount;
-            this.openIssuesCount = openIssuesCount;
-            this.size = size;
-            this.defaultBranch = defaultBranch;
-            this.createdAt = createdAt;
-            this.updatedAt = updatedAt;
-            this.owner = owner;
-            this.topics = topics;
-            this.license = license;
-        }
-
-        static GitHubRepo fromMap(Map<String, Object> m) {
-            return new GitHubRepo(
-                    ((Number) m.get("id")).longValue(),
-                    (String) m.get("name"),
-                    (String) m.get("full_name"),
-                    (String) m.get("description"),
-                    (String) m.get("language"),
-                    (Integer) m.getOrDefault("stargazers_count", 0),
-                    (Integer) m.getOrDefault("forks_count", 0),
-                    (Integer) m.getOrDefault("watchers_count", 0),
-                    (Integer) m.getOrDefault("open_issues_count", 0),
-                    (Integer) m.getOrDefault("size", 0),
-                    (String) m.get("default_branch"),
-                    (String) m.get("created_at"),
-                    (String) m.get("updated_at"),
-                    (Map<String, Object>) m.get("owner"),
-                    m.containsKey("topics") ? (List<String>) m.get("topics") : Collections.emptyList(),
-                    (Map<String, Object>) m.get("license")
-            );
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("total", total);
         result.put("classified", classified);
@@ -527,31 +438,5 @@ public class CrawlerService {
 
         log.info("========== 语言归一化完成: 总数={}, 修复={} ==========", total, updated);
         return Map.of("total", total, "updated", updated);
-
-        // ===== getter 方法 (保持与 record 一致的调用风格) =====
-        public long id() { return id; }
-        public String name() { return name; }
-        public String fullName() { return fullName; }
-        public String description() { return description; }
-        public String language() { return language; }
-        public int stargazersCount() { return stargazersCount; }
-        public int forksCount() { return forksCount; }
-        public int watchersCount() { return watchersCount; }
-        public int openIssuesCount() { return openIssuesCount; }
-        public int size() { return size; }
-        public String defaultBranch() { return defaultBranch; }
-        public String createdAt() { return createdAt; }
-        public String updatedAt() { return updatedAt; }
-        public Map<String, Object> owner() { return owner; }
-        public List<String> topics() { return topics; }
-        public Map<String, Object> license() { return license; }
-    }
-
-    // ======================== 内部 ========================
-
-    /** 保存 Owner + Project 元信息 (不拉取 commits, commits 改为按需拉取) */
-    private void saveRepo(GitHubRepo repo, String language) {
-        String ownerId = ownerCrawler.saveOwner(repo.owner()).getId();
-        projectCrawler.saveOrUpdateProject(repo, ownerId, language);
     }
 }

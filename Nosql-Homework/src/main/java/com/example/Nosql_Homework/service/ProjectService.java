@@ -22,4 +22,15 @@ public interface ProjectService {
 
     /** 按语言统计项目数, 按数量降序 */
     List<Map<String, Object>> getLanguageStats();
+
+    // ============ Tiger-RAG 向量补全 ============
+
+    /** 查看项目集合的 embedding 统计 */
+    Map<String, Object> embedStats();
+
+    /** 为单个项目生成/重新生成向量 */
+    boolean embedProject(String projectId, boolean force);
+
+    /** 批量启动向量生成任务 */
+    Map<String, Object> startBatchEmbed(int batchSize, boolean force);
 }
