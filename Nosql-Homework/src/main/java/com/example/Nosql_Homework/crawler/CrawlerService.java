@@ -1,9 +1,18 @@
 package com.example.Nosql_Homework.crawler;
 
+import com.example.Nosql_Homework.crawler.crawler.CommitCrawler;
+import com.example.Nosql_Homework.crawler.crawler.ContributorCrawler;
+import com.example.Nosql_Homework.crawler.crawler.OwnerCrawler;
+import com.example.Nosql_Homework.crawler.crawler.ProjectCrawler;
+import com.example.Nosql_Homework.crawler.dto.GitHubRepo;
+import com.example.Nosql_Homework.crawler.util.CategoryClassifier;
+import com.example.Nosql_Homework.crawler.util.LanguageNormalizer;
+import com.example.Nosql_Homework.entity.Contributor;
 import com.example.Nosql_Homework.entity.Owner;
 import com.example.Nosql_Homework.entity.Project;
 import com.example.Nosql_Homework.repository.OwnerRepository;
 import com.example.Nosql_Homework.repository.ProjectRepository;
+import com.example.Nosql_Homework.service.impl.EmbeddingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,21 +26,28 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 
 import java.time.Instant;
-import java.util.*;
-import java.util.concurrent.TimeUnit;
+import java.util.Collections;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
- * GitHub API 采集服务
- * 参考文档: https://docs.github.com/en/rest
+ * 爬虫编排服务 — 协调四个 Collection 爬虫完成增量采集与回填
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class CrawlerService {
 
-    private final RestTemplate restTemplate = createRestTemplate();
+    private final GitHubApiClient apiClient;
+    private final OwnerCrawler ownerCrawler;
+    private final ProjectCrawler projectCrawler;
+    private final CommitCrawler commitCrawler;
+    private final ContributorCrawler contributorCrawler;
     private final ProjectRepository projectRepository;
     private final OwnerRepository ownerRepository;
+    private final EmbeddingService embeddingService;
 
     private static RestTemplate createRestTemplate() {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
@@ -46,34 +62,20 @@ public class CrawlerService {
         return new RestTemplate(factory);
     }
 
-    @Value("${github.tokens:}")
-    private String tokenList;
-
-    /** 每页拉取条数 (GitHub REST API 最大 100) */
     private static final int PER_PAGE = 30;
 
-    /** 限速间隔 (毫秒) */
-    private static final long RATE_LIMIT_MS = 2500;
-
-    /** GitHub 搜索 API 每 token 每分钟最多 30 次 */
-    private long lastCallTime = 0;
-
-    /** 成功入库计数 (统计用) */
     private int totalSaved = 0;
-    /** 失败计数 (统计用) */
     private int totalFailed = 0;
 
     /**
      * 按语言增量采集
-     * @param language 编程语言, 如 Java / Python / JavaScript
-     * @param maxPages 每个语言最多拉取页数
      */
-    public void crawlByLanguage(String language, int maxPages) {
+    public void crawlByLanguage(String rawLanguage, int maxPages) {
+        String language = LanguageNormalizer.normalize(rawLanguage);
         log.info("========== 开始采集 ==========");
-        log.info("  language    = {}", language);
+        log.info("  language    = {} (原始: {})", language, rawLanguage);
         log.info("  maxPages    = {}", maxPages);
         log.info("  perPage     = {}", PER_PAGE);
-        log.info("  tokens配置  = {}", tokenList != null && !tokenList.isBlank() ? "已配置 (" + tokenList.split(",").length + "个)" : "未配置");
         log.info("==============================");
 
         totalSaved = 0;
@@ -86,8 +88,8 @@ public class CrawlerService {
             String pageUrl = baseUrl + "&page=" + page;
             try {
                 log.debug("  请求 page={} URL={}", page, pageUrl);
-                rateLimit();
-                List<GitHubRepo> repos = fetchPage(pageUrl, page);
+                apiClient.rateLimit();
+                List<GitHubRepo> repos = apiClient.searchRepositories(pageUrl, page);
                 if (repos.isEmpty()) {
                     log.info("  page={} 返回空, 停止翻页", page);
                     break;
@@ -120,102 +122,147 @@ public class CrawlerService {
         log.info("==============================");
     }
 
-    // ======================== 内部 ========================
+    /**
+     * 按需拉取项目的 commits 并入库 (用户点击"查看Commit"时调用)
+     * @return 拉取的 commit 条数
+     */
+    public int fetchCommitsOnDemand(String projectId) {
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new IllegalArgumentException("项目不存在: " + projectId));
 
-    /** 简单限速：每次调用间隔至少 RATE_LIMIT_MS */
-    private void rateLimit() {
-        long now = System.currentTimeMillis();
-        long elapsed = now - lastCallTime;
-        long wait = RATE_LIMIT_MS - elapsed;
-        if (wait > 0) {
-            log.debug("  限速等待 {}ms (距上次调用 {}ms)", wait, elapsed);
-            try { TimeUnit.MILLISECONDS.sleep(wait); } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.warn("  限速等待被中断", e);
-            }
+        String fullName = project.getFullName();
+        if (fullName == null || !fullName.contains("/")) {
+            throw new IllegalArgumentException("项目 fullName 格式异常: " + fullName);
         }
-        lastCallTime = System.currentTimeMillis();
+
+        String[] parts = fullName.split("/");
+        String owner = parts[0];
+        String repo = parts[1];
+
+        log.info("[按需拉取] 开始拉取 commits: {}/{}", owner, repo);
+        int saved = commitCrawler.fetchAndSaveCommits(owner, repo, projectId);
+
+        long commitTotal = commitCrawler.countByProject(projectId);
+        project.setCommitsCount((int) commitTotal);
+        projectRepository.save(project);
+
+        log.info("[按需拉取] 完成: {}/{}, 共拉取 {} 条 commits", owner, repo, saved);
+        return saved;
     }
 
-    /** 调用 GitHub Search API */
-    private List<GitHubRepo> fetchPage(String url, int page) {
-        long startTime = System.currentTimeMillis();
-        HttpHeaders headers = new HttpHeaders();
-        headers.set("Accept", "application/vnd.github+json");
-        headers.set("X-GitHub-Api-Version", "2022-11-28");
-        headers.set("User-Agent", "Nosql-Homework-Crawler");
-        addAuth(headers);
+    /**
+     * 批量回填: 遍历所有项目, 对缺少 contributors 的项目从 GitHub API 补齐
+     * (commits 不再回填, 改为按需拉取)
+     */
+    public Map<String, Object> backfillAll(boolean force) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        List<Project> allProjects = projectRepository.findAll();
+        int total = allProjects.size();
+        int success = 0;
+        int skipped = 0;
+        int failed = 0;
 
-        try {
-            ResponseEntity<Map<String, Object>> resp = restTemplate.exchange(
-                    url, HttpMethod.GET, new HttpEntity<>(headers),
-                    new ParameterizedTypeReference<Map<String, Object>>() {});
+        log.info("========== 批量回填 contributors 开始 ==========");
+        log.info("  项目总数: {}, 强制覆盖: {}", total, force);
+        result.put("totalProjects", total);
+        result.put("force", force);
 
-            long elapsed = System.currentTimeMillis() - startTime;
+        for (int i = 0; i < total; i++) {
+            Project project = allProjects.get(i);
+            String fullName = project.getFullName();
+            log.info("[{}/{}] 处理: {}", i + 1, total, fullName);
 
-            // 打印 Rate Limit 信息
-            logRateLimitHeaders(resp.getHeaders());
-
-            HttpStatusCode statusCode = resp.getStatusCode();
-            if (!statusCode.is2xxSuccessful()) {
-                log.warn("  page={} 非2xx响应: status={}, 耗时={}ms", page, statusCode, elapsed);
-                return Collections.emptyList();
+            if (fullName == null || !fullName.contains("/")) {
+                log.warn("  跳过: fullName 格式异常");
+                skipped++;
+                continue;
             }
 
-            if (resp.getBody() == null) {
-                log.warn("  page={} 响应体为空, status={}, 耗时={}ms", page, statusCode, elapsed);
-                return Collections.emptyList();
-            }
+            String[] parts = fullName.split("/");
+            String owner = parts[0];
+            String repo = parts[1];
 
-            if (!resp.getBody().containsKey("items")) {
-                log.warn("  page={} 响应体中无items字段, body keys={}, 耗时={}ms",
-                        page, resp.getBody().keySet(), elapsed);
-                // 可能是被限流了
-                if (resp.getBody().containsKey("message")) {
-                    log.error("  page={} GitHub API 错误信息: {}", page, resp.getBody().get("message"));
+            boolean hasContributors = contributorCrawler.hasContributors(project.getId());
+
+            try {
+                if (force || !hasContributors) {
+                    if (force && hasContributors) contributorCrawler.deleteByProject(project.getId());
+                    contributorCrawler.fetchAndSaveContributors(owner, repo, project.getId(), 2);
+                    List<Contributor> contribs = contributorCrawler.listByProject(project.getId());
+                    project.setContributorsCount(contribs.size());
+                } else {
+                    log.info("  contributors 已存在, 跳过");
                 }
-                return Collections.emptyList();
+                projectRepository.save(project);
+                success++;
+                log.info("  ✅ 完成: {} (contributors={})", fullName, project.getContributorsCount());
+            } catch (Exception e) {
+                failed++;
+                log.error("  ❌ 失败 {}: {}", fullName, e.getMessage());
             }
 
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> items = (List<Map<String, Object>>) resp.getBody().get("items");
-            int totalCount = resp.getBody().containsKey("total_count")
-                    ? ((Number) resp.getBody().get("total_count")).intValue() : -1;
-            log.debug("  page={} 响应成功 | 耗时={}ms | total_count={} | items={}",
-                    page, elapsed, totalCount, items.size());
-
-            List<GitHubRepo> repos = new ArrayList<>();
-            for (Map<String, Object> item : items) {
-                try {
-                    repos.add(GitHubRepo.fromMap(item));
-                } catch (Exception e) {
-                    log.error("  page={} 解析单条repo失败: id={}, error={}",
-                            page, item.get("id"), e.getMessage(), e);
-                }
+            if ((i + 1) % 10 == 0) {
+                log.info("========== 回填进度: {}/{} (成功{} 跳过{} 失败{}) ==========",
+                        i + 1, total, success, skipped, failed);
             }
-            return repos;
-        } catch (ResourceAccessException e) {
-            long elapsed = System.currentTimeMillis() - startTime;
-            log.error("  page={} 网络连接失败 (耗时{}ms)", page, elapsed);
-            log.error("  目标 URL: {}", url);
-            log.error("  原始异常: {} - {}", e.getClass().getSimpleName(), e.getMessage());
-            if (e.getCause() != null) {
-                log.error("  根因: {} - {}", e.getCause().getClass().getSimpleName(), e.getCause().getMessage());
-            }
-            log.error("  提示: 请检查网络连接/代理/VPN 是否正常", e);
-            throw e;
-        } catch (HttpStatusCodeException e) {
-            long elapsed = System.currentTimeMillis() - startTime;
-            log.error("  page={} HTTP错误 (耗时{}ms): status={}", page, elapsed, e.getStatusCode());
-            log.error("  响应体: {}", e.getResponseBodyAsString());
-            logRateLimitHeaders(e.getResponseHeaders());
-            throw e;
-        } catch (RestClientException e) {
-            long elapsed = System.currentTimeMillis() - startTime;
-            log.error("  page={} 请求异常 (耗时{}ms): {} - {}",
-                    page, elapsed, e.getClass().getSimpleName(), e.getMessage(), e);
-            throw e;
         }
+
+        result.put("success", success);
+        result.put("skipped", skipped);
+        result.put("failed", failed);
+        log.info("========== 批量回填结束 ==========");
+        log.info("  成功: {}, 跳过: {}, 失败: {}", success, skipped, failed);
+        return result;
+    }
+
+    /**
+     * 增量回填: 只处理缺少 contributors 的项目 (commits 改为按需拉取)
+     */
+    public Map<String, Object> backfillMissing() {
+        List<Project> allProjects = projectRepository.findAll();
+        List<Project> missing = allProjects.stream()
+                .filter(p -> !contributorCrawler.hasContributors(p.getId()))
+                .toList();
+
+        log.info("========== 增量回填 contributors: 共 {} 个项目缺失数据 ==========", missing.size());
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("totalProjects", allProjects.size());
+        result.put("missingProjects", missing.size());
+
+        int success = 0;
+        int failed = 0;
+
+        for (int i = 0; i < missing.size(); i++) {
+            Project project = missing.get(i);
+            String fullName = project.getFullName();
+            log.info("[{}/{}] 处理: {}", i + 1, missing.size(), fullName);
+
+            if (fullName == null || !fullName.contains("/")) {
+                log.warn("  跳过: fullName 格式异常");
+                continue;
+            }
+
+            String[] parts = fullName.split("/");
+            String owner = parts[0];
+            String repo = parts[1];
+
+            try {
+                contributorCrawler.fetchAndSaveContributors(owner, repo, project.getId(), 2);
+                List<Contributor> contribs = contributorCrawler.listByProject(project.getId());
+                project.setContributorsCount(contribs.size());
+                projectRepository.save(project);
+                success++;
+            } catch (Exception e) {
+                failed++;
+                log.error("  ❌ 失败 {}: {}", fullName, e.getMessage());
+            }
+        }
+
+        result.put("success", success);
+        result.put("failed", failed);
+        log.info("========== 增量回填结束: 成功{} 失败{} ==========", success, failed);
+        return result;
     }
 
     /** 打印 Rate Limit 相关响应头 */
@@ -235,7 +282,7 @@ public class CrawlerService {
     /** 保存项目与 Owner 到 MongoDB */
     private void saveRepo(GitHubRepo repo, String defaultLanguage) {
         // Owner
-        Map<String, Object> ownerMap = repo.owner;
+        Map<String, Object> ownerMap = repo.owner();
         long ownerId = ((Number) ownerMap.get("id")).longValue();
         Owner owner = ownerRepository.findByGithubId(ownerId).orElseGet(() -> Owner.builder()
                 .githubId(ownerId)
@@ -249,83 +296,147 @@ public class CrawlerService {
         owner = ownerRepository.save(owner);
 
         // Project (幂等: 按 github_id upsert)
-        Project existing = projectRepository.findByGithubId(repo.id).orElse(null);
+        Project existing = projectRepository.findByGithubId(repo.id()).orElse(null);
         Project project;
         if (existing != null) {
             project = existing;
             // 只更新变化字段
-            project.setStarsCount(repo.stargazersCount);
-            project.setForksCount(repo.forksCount);
-            project.setWatchersCount(repo.watchersCount);
-            project.setOpenIssuesCount(repo.openIssuesCount);
-            project.setUpdatedAt(Date.from(Instant.parse(repo.updatedAt)));
+            project.setStarsCount(repo.stargazersCount());
+            project.setForksCount(repo.forksCount());
+            project.setWatchersCount(repo.watchersCount());
+            project.setOpenIssuesCount(repo.openIssuesCount());
+            project.setUpdatedAt(Date.from(Instant.parse(repo.updatedAt())));
         } else {
             project = Project.builder()
-                    .githubId(repo.id)
-                    .name(repo.name)
-                    .fullName(repo.fullName)
+                    .githubId(repo.id())
+                    .name(repo.name())
+                    .fullName(repo.fullName())
                     .ownerId(owner.getId())
-                    .description(repo.description)
+                    .description(repo.description())
                     .language(defaultLanguage)
-                    .topics(repo.topics)
-                    .license(repo.license != null ? (String) repo.license.get("spdx_id") : null)
-                    .starsCount(repo.stargazersCount)
-                    .forksCount(repo.forksCount)
-                    .watchersCount(repo.watchersCount)
-                    .openIssuesCount(repo.openIssuesCount)
-                    .sizeKb(repo.size)
-                    .defaultBranch(repo.defaultBranch)
-                    .createdAt(Date.from(Instant.parse(repo.createdAt)))
-                    .updatedAt(Date.from(Instant.parse(repo.updatedAt)))
+                    .topics(repo.topics())
+                    .license(repo.license() != null ? (String) repo.license().get("spdx_id") : null)
+                    .starsCount(repo.stargazersCount())
+                    .forksCount(repo.forksCount())
+                    .watchersCount(repo.watchersCount())
+                    .openIssuesCount(repo.openIssuesCount())
+                    .sizeKb(repo.size())
+                    .defaultBranch(repo.defaultBranch())
+                    .createdAt(Date.from(Instant.parse(repo.createdAt())))
+                    .updatedAt(Date.from(Instant.parse(repo.updatedAt())))
+                    .hasEmbedding(false)
                     .build();
         }
         project.setCrawledAt(new Date());
         projectRepository.save(project);
-    }
 
-    /** 设置 Token 认证头 */
-    private void addAuth(HttpHeaders headers) {
-        if (tokenList != null && !tokenList.isBlank()) {
-            String[] tokens = tokenList.split(",");
-            String token = tokens[(int) (System.currentTimeMillis() / 1000 % tokens.length)].trim();
-            // 只打印 token 前 8 位, 避免泄露
-            String masked = token.length() > 8 ? token.substring(0, 8) + "..." : token.substring(0, Math.min(4, token.length())) + "...";
-            log.debug("  使用Token: {}", masked);
-            headers.setBearerAuth(token);
-        } else {
-            log.debug("  未配置Token, 使用无认证请求 (限速更严格)");
+        // ===== Tiger-RAG: 自动为项目生成 embedding 向量 =====
+        try {
+            String embedText = project.toEmbeddingText();
+            java.util.List<Float> vec = embeddingService.embed(embedText);
+            if (vec != null && !vec.isEmpty()) {
+                project.setEmbedding(vec);
+                project.setEmbeddingModel(embeddingService.getModelName());
+                project.setHasEmbedding(true);
+                projectRepository.save(project);
+                log.debug("  [Tiger-RAG] 项目 {} 向量生成成功, 维度={}", project.getName(), vec.size());
+            } else {
+                log.warn("  [Tiger-RAG] 项目 {} 向量生成失败 (返回空)", project.getName());
+            }
+        } catch (Exception e) {
+            log.warn("  [Tiger-RAG] 项目 {} 向量生成异常: {} - {}, 已标记 hasEmbedding=false, 可通过 batch-embed 接口补全",
+                    project.getName(), e.getClass().getSimpleName(), e.getMessage());
         }
     }
 
-    // ======================== DTO ========================
+    /**
+     * 回填项目分类: 遍历所有 category 为 null 的项目，用 CategoryClassifier 打标
+     * <ul>
+     *   <li>null → 尝试分类，命中则写分类名，否则写 ""</li>
+     *   <li>""  (empty) → 默认不重试，除非 force=true</li>
+     * </ul>
+     * @param force 是否对已标记为 "" 的项目重新尝试分类
+     * @return { total, classified, unclassified, retried }
+     */
+    public Map<String, Object> backfillCategories(boolean force) {
+        List<Project> nullProjects = projectRepository.findByCategoryIsNull();
+        int total = nullProjects.size();
+        int classified = 0;
+        int unclassified = 0;
+        int retried = 0;
 
-    @SuppressWarnings("unchecked")
-    private record GitHubRepo(
-            long id, String name, String fullName, String description,
-            String language, int stargazersCount, int forksCount,
-            int watchersCount, int openIssuesCount, int size,
-            String defaultBranch, String createdAt, String updatedAt,
-            Map<String, Object> owner, List<String> topics, Map<String, Object> license
-    ) {
-        static GitHubRepo fromMap(Map<String, Object> m) {
-            return new GitHubRepo(
-                    ((Number) m.get("id")).longValue(),
-                    (String) m.get("name"),
-                    (String) m.get("full_name"),
-                    (String) m.get("description"),
-                    (String) m.get("language"),
-                    (Integer) m.getOrDefault("stargazers_count", 0),
-                    (Integer) m.getOrDefault("forks_count", 0),
-                    (Integer) m.getOrDefault("watchers_count", 0),
-                    (Integer) m.getOrDefault("open_issues_count", 0),
-                    (Integer) m.getOrDefault("size", 0),
-                    (String) m.get("default_branch"),
-                    (String) m.get("created_at"),
-                    (String) m.get("updated_at"),
-                    (Map<String, Object>) m.get("owner"),
-                    m.containsKey("topics") ? (List<String>) m.get("topics") : Collections.emptyList(),
-                    (Map<String, Object>) m.get("license")
-            );
+        log.info("========== 分类回填开始: null类项目={}, force={} ==========", total, force);
+
+        for (int i = 0; i < total; i++) {
+            Project p = nullProjects.get(i);
+            String category = CategoryClassifier.classify(p);
+            p.setCategory(category);
+            projectRepository.save(p);
+
+            if (CategoryClassifier.UNCLASSIFIED_EMPTY.equals(category)) {
+                unclassified++;
+            } else {
+                classified++;
+            }
+
+            if ((i + 1) % 50 == 0) {
+                log.info("  进度: {}/{} (已分类: {}, 未匹配: {})", i + 1, total, classified, unclassified);
+            }
         }
+
+        // force 模式: 也对已标记为 "" 的项目重试
+        if (force) {
+            List<Project> emptyProjects = projectRepository.findAllByCategory(
+                    CategoryClassifier.UNCLASSIFIED_EMPTY);
+            log.info("  force模式: 重试 {} 个已标记为空的的项目", emptyProjects.size());
+            for (Project p : emptyProjects) {
+                String category = CategoryClassifier.classify(p);
+                if (!CategoryClassifier.UNCLASSIFIED_EMPTY.equals(category)) {
+                    p.setCategory(category);
+                    projectRepository.save(p);
+                    retried++;
+                    classified++;
+                }
+            }
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("total", total);
+        result.put("classified", classified);
+        result.put("unclassified", unclassified);
+        result.put("retried", retried);
+        result.put("force", force);
+        log.info("========== 分类回填结束: 总数={}, 已分类={}, 未匹配={}, 重试成功={} ==========",
+                total, classified, unclassified, retried);
+        return result;
+    }
+
+    /**
+     * 一键修复历史数据：遍历所有项目，将 language 字段归一化为标准名
+     * 解决历史数据中 "js"/"JavaScript"、"java"/"Java" 等混合存在的问题
+     * @return { total, updated } 总数和实际修改数
+     */
+    public Map<String, Object> normalizeAllProjectLanguages() {
+        List<Project> allProjects = projectRepository.findAll();
+        int total = allProjects.size();
+        int updated = 0;
+
+        log.info("========== 语言归一化修复开始: 共 {} 个项目 ==========", total);
+
+        for (Project p : allProjects) {
+            String oldLang = p.getLanguage();
+            if (oldLang == null || oldLang.isBlank()) continue;
+
+            String normalized = LanguageNormalizer.normalize(oldLang);
+            if (!normalized.equals(oldLang)) {
+                log.info("  修复: {} → {}", oldLang, normalized);
+                p.setLanguage(normalized);
+                projectRepository.save(p);
+                updated++;
+            }
+        }
+
+        log.info("========== 语言归一化完成: 总数={}, 修复={} ==========", total, updated);
+        return Map.of("total", total, "updated", updated);
     }
 }

@@ -15,6 +15,10 @@
         <el-menu-item index="/projects">项目浏览</el-menu-item>
         <el-menu-item index="/search">智能检索</el-menu-item>
         <el-menu-item index="/history">检索历史</el-menu-item>
+        <el-menu-item index="/tiger-rag">
+          <el-icon><MagicStick /></el-icon>
+          <span>Tiger-RAG</span>
+        </el-menu-item>
       </el-menu>
     </el-header>
     <el-main class="app-main">
@@ -29,6 +33,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
+import { MagicStick } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const activeMenu = computed(() => {
@@ -36,6 +41,7 @@ const activeMenu = computed(() => {
   if (path.startsWith('/projects')) return '/projects'
   if (path.startsWith('/search')) return '/search'
   if (path.startsWith('/history')) return '/history'
+  if (path.startsWith('/tiger-rag')) return '/tiger-rag'
   return '/'
 })
 </script>

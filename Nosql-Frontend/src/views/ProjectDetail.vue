@@ -80,7 +80,23 @@
 
         <!-- 提交历史 -->
         <el-card shadow="never" style="margin-top: 16px">
-          <template #header><span class="section-title">提交历史</span></template>
+          <template #header>
+            <div class="section-header-row">
+              <span class="section-title">提交历史</span>
+              <el-button
+                v-if="!commitsLoaded && !fetchingCommits"
+                type="primary"
+                size="small"
+                :loading="fetchingCommits"
+                @click="doFetchCommits"
+              >
+                查看 Commit
+              </el-button>
+              <el-tag v-if="fetchingCommits" type="warning" size="small">
+                正在从 GitHub 拉取...
+              </el-tag>
+            </div>
+          </template>
           <el-timeline v-if="commits.length">
             <el-timeline-item
               v-for="commit in commits"
@@ -94,14 +110,26 @@
                   <span class="commit-sha">{{ commit.sha?.substring(0, 7) }}</span>
                 </div>
                 <p class="commit-message">{{ commit.message }}</p>
-                <div class="commit-stats">
-                  <span class="additions">+{{ commit.additions || 0 }}</span>
-                  <span class="deletions">-{{ commit.deletions || 0 }}</span>
-                </div>
               </el-card>
             </el-timeline-item>
           </el-timeline>
-          <el-empty v-else description="暂无提交记录" />
+          <el-empty v-else-if="commitsLoaded" description="暂无提交记录" />
+          <div v-else class="commit-placeholder">
+            <el-icon :size="32" color="#a0a0b8"><Timer /></el-icon>
+            <p>点击 "查看 Commit" 从 GitHub 拉取提交历史</p>
+          </div>
+          <div v-if="commitTotal > 0" style="margin-top: 16px; text-align: right">
+            <el-pagination
+              v-model:current-page="commitPage.page"
+              :page-size="commitPage.size"
+              :total="commitTotal"
+              :page-sizes="[10, 20, 50]"
+              layout="total, sizes, prev, pager, next"
+              size="small"
+              @size-change="loadCommits"
+              @current-change="loadCommits"
+            />
+          </div>
         </el-card>
       </el-col>
 
@@ -145,15 +173,20 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { getProject, getProjectCommits, getProjectContributors } from '../api/project'
+import { getProject, getProjectCommits, getProjectContributors, fetchProjectCommits } from '../api/project'
+import { ElMessage } from 'element-plus'
 
 const route = useRoute()
 const loading = ref(true)
 const project = ref(null)
 const commits = ref([])
 const contributors = ref([])
+const commitTotal = ref(0)
+const commitPage = reactive({ page: 1, size: 20 })
+const fetchingCommits = ref(false)
+const commitsLoaded = ref(false)
 
 const statItems = [
   { key: 'starsCount', label: 'Star' },
@@ -195,17 +228,45 @@ function formatDateTime(d) {
   return new Date(d).toLocaleString('zh-CN')
 }
 
+async function loadCommits() {
+  if (!route.params.id) return
+  try {
+    const data = await getProjectCommits(route.params.id, {
+      page: commitPage.page,
+      size: commitPage.size
+    })
+    commits.value = data.records || []
+    commitTotal.value = data.total || 0
+  } catch (e) {
+    console.error('加载提交历史失败:', e)
+  }
+}
+
+async function doFetchCommits() {
+  fetchingCommits.value = true
+  try {
+    const res = await fetchProjectCommits(route.params.id)
+    ElMessage.success(`成功拉取 ${res.fetched} 条提交记录`)
+    commitsLoaded.value = true
+    await loadCommits()
+  } catch (e) {
+    console.error('拉取提交历史失败:', e)
+    ElMessage.error('拉取提交历史失败，请稍后重试')
+  } finally {
+    fetchingCommits.value = false
+  }
+}
+
 onMounted(async () => {
   try {
     const id = route.params.id
-    const [proj, commitData, contribData] = await Promise.all([
+    const [proj, contribData] = await Promise.all([
       getProject(id),
-      getProjectCommits(id, { page: 1, size: 20 }),
       getProjectContributors(id)
     ])
     project.value = proj
-    commits.value = commitData.records || []
     contributors.value = Array.isArray(contribData) ? contribData : (contribData.records || [])
+    // 不自动加载 commits, 等用户点击按钮
   } catch (e) {
     console.error('加载项目详情失败:', e)
   } finally {
@@ -263,6 +324,20 @@ onMounted(async () => {
 .section-title {
   font-weight: 600;
   font-size: 15px;
+}
+.section-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.commit-placeholder {
+  text-align: center;
+  padding: 32px 16px;
+  color: #a0a0b8;
+}
+.commit-placeholder p {
+  margin-top: 12px;
+  font-size: 14px;
 }
 .commit-header {
   display: flex;

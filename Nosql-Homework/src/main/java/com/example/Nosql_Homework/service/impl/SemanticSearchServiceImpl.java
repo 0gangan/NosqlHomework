@@ -81,23 +81,23 @@ public class SemanticSearchServiceImpl implements SemanticSearchService {
      * 使用 LLM 将自然语言解析为结构化查询条件
      */
     private ParsedIntent parseIntent(String query) {
-        String prompt = """
-                你是一个 GitHub 项目检索助手。请将用户的自然语言查询解析为 JSON 格式，提取以下字段：
-                - intent: 查询意图 (code_search / trend_analysis / similar_project / project_search)
-                - language: 编程语言 (如 Java, Python, JavaScript, Go 等，未提及则为 null)
-                - category: 软件品类 (如 web, mobile, desktop, tool, ai 等，未提及则为 null)
-                - keywords: 搜索关键词 (提取核心技术名词，用空格分隔)
-
-                用户查询: %s
-
-                只返回 JSON，不要有其他内容:
-                {"intent":"...", "language":"...", "category":"...", "keywords":"..."}
-                """.formatted(query);
+        StringBuilder sb = new StringBuilder();
+        sb.append("你是一个 GitHub 项目检索助手。请将用户的自然语言查询解析为 JSON 格式，提取以下字段：\n");
+        sb.append("- intent: 查询意图 (code_search / trend_analysis / similar_project / project_search)\n");
+        sb.append("- language: 编程语言 (如 Java, Python, JavaScript, Go 等，未提及则为 null)\n");
+        sb.append("- category: 软件品类 (如 web, mobile, desktop, tool, ai 等，未提及则为 null)\n");
+        sb.append("- keywords: 搜索关键词 (提取核心技术名词，用空格分隔)\n");
+        sb.append("\n");
+        sb.append("用户查询: ").append(query).append("\n");
+        sb.append("\n");
+        sb.append("只返回 JSON，不要有其他内容:\n");
+        sb.append("{\"intent\":\"...\", \"language\":\"...\", \"category\":\"...\", \"keywords\":\"...\"}\n");
+        String prompt = sb.toString();
 
         log.info("[LLM] 发送 Prompt (长度={} chars): {}", prompt.length(), prompt);
 
+        long startTime = System.currentTimeMillis();
         try {
-            long startTime = System.currentTimeMillis();
             String response = chatModel.generate(prompt);
             long costMs = System.currentTimeMillis() - startTime;
 
@@ -110,7 +110,13 @@ public class SemanticSearchServiceImpl implements SemanticSearchService {
 
             return result;
         } catch (Exception e) {
-            log.error("[LLM] 调用失败 → 使用关键词兜底策略", e);
+            long cost = System.currentTimeMillis() - startTime;
+            Throwable root = e;
+            while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+            log.error("[LLM] 意图解析失败: 异常类型={}, 消息={}, rootCause={}, 消息={}, Prompt长度={}, 耗时={}ms → 使用关键词兜底策略",
+                    e.getClass().getSimpleName(), e.getMessage(),
+                    root.getClass().getSimpleName(), root.getMessage(),
+                    prompt.length(), cost, e);
             ParsedIntent fallback = fallbackParse(query);
             log.info("[LLM] 兜底解析: intent={}, keywords={}", fallback.intent, fallback.keywords);
             return fallback;

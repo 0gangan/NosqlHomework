@@ -73,7 +73,7 @@
 
 <script setup>
 import { ref, onMounted, nextTick } from 'vue'
-import { listProjects } from '../api/project'
+import { listProjects, getLanguageStats } from '../api/project'
 import { listOwnersByType } from '../api/owner'
 import { getSearchHistory } from '../api/search'
 import * as echarts from 'echarts'
@@ -87,9 +87,6 @@ const stats = ref([
   { label: '组织/用户', value: '-', icon: 'User', color: 'rgba(247,147,30,0.12)' },
   { label: '检索记录', value: '-', icon: 'Search', color: 'rgba(247,147,30,0.12)' }
 ])
-
-// 图表使用的语言列表 — 仅作为查询参数传后端，实际数量来自 API 返回值
-const chartLanguages = ['Java', 'Python', 'JavaScript', 'Go', 'TypeScript', 'Rust', 'C++', 'Ruby']
 
 function formatNumber(n) {
   if (n == null) return '-'
@@ -129,35 +126,41 @@ async function loadData() {
     const topRes = await listProjects({ page: 1, size: 10, sortBy: 'starsCount' })
     topProjects.value = topRes.records || []
 
-    // 语言分布 (一次查询，同时用于图表和"编程语言"统计)
+    // 语言分布 (从后端聚合接口获取真实数据)
     await nextTick()
-    renderLangChart()
+    await renderLangChart()
   } catch (e) {
     console.error('加载首页数据失败:', e)
   }
 }
 
-function renderLangChart() {
+async function renderLangChart() {
   if (!langChartRef.value) return
   const chart = echarts.init(langChartRef.value)
 
-  const langQueries = chartLanguages.map(lang =>
-    listProjects({ page: 1, size: 1, language: lang }).catch(() => ({ total: 0 }))
-  )
-
-  Promise.all(langQueries).then((results) => {
-    const data = chartLanguages
-      .map((lang, i) => ({ name: lang, value: results[i].total || 0 }))
+  try {
+    const data = await getLanguageStats()
+    const items = (Array.isArray(data) ? data : [])
+      .map(d => ({ name: d._id || d.language || 'Unknown', value: d.count || 0 }))
       .filter(d => d.value > 0)
 
     // 更新"编程语言"统计卡片
-    stats.value[1].value = formatNumber(data.length)
+    stats.value[1].value = formatNumber(items.length)
 
-    if (data.length === 0) {
+    if (items.length === 0) {
       chart.setOption({
         title: { text: '暂无数据', left: 'center', top: 'center', textStyle: { color: '#909399', fontSize: 14 } }
       })
       return
+    }
+
+    // 超过 8 种语言时合并小份额为 "其他"
+    let chartData = items
+    if (items.length > 8) {
+      const top8 = items.slice(0, 8)
+      const otherCount = items.slice(8).reduce((sum, d) => sum + d.value, 0)
+      top8.push({ name: '其他', value: otherCount })
+      chartData = top8
     }
 
     chart.setOption({
@@ -169,10 +172,15 @@ function renderLangChart() {
         avoidLabelOverlap: false,
         itemStyle: { borderRadius: 6, borderColor: '#1e1e36', borderWidth: 2 },
         label: { show: true, formatter: '{b}\n{d}%' },
-        data: data
+        data: chartData
       }]
     })
-  })
+  } catch (e) {
+    console.error('加载语言分布失败:', e)
+    chart.setOption({
+      title: { text: '加载失败', left: 'center', top: 'center', textStyle: { color: '#909399', fontSize: 14 } }
+    })
+  }
 
   window.addEventListener('resize', () => chart.resize())
 }
