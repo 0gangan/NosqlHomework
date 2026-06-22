@@ -98,7 +98,7 @@ public class SemanticSearchServiceImpl implements SemanticSearchService {
         sb.append("    database=数据库, devops=DevOps, security=安全, game=游戏,\n");
         sb.append("    tool=开发工具, data=数据/分析\n");
         sb.append("    注意：category字段只返回小写英文值，如\"ai\"、\"web\"，不要返回中文\n");
-        sb.append("- keywords: 搜索关键词 (提取核心技术名词，用空格分隔)\n");
+        sb.append("- keywords: 搜索关键词 (提取核心技术名词，必须翻译为英文，用空格分隔，不要返回中文)\n");
         sb.append("\n");
         sb.append("用户查询: ").append(query).append("\n");
         sb.append("\n");
@@ -178,7 +178,15 @@ public class SemanticSearchServiceImpl implements SemanticSearchService {
     private List<Project> queryProjects(ParsedIntent parsed, int topK) {
         PageRequest pageable = PageRequest.of(0, topK);
 
-        // 优先按语言 + 关键词查询
+        // 优先按分类查询（后端预定义分类，精准匹配）
+        if (parsed.category != null) {
+            log.info("[查询] 策略: 分类 → category={}", parsed.category);
+            var page = projectRepository.findByCategory(parsed.category, pageable);
+            log.info("[查询] 分类查询命中 {} 条 (总数: {})", page.getContent().size(), page.getTotalElements());
+            return page.getContent();
+        }
+
+        // 按语言 + 关键词查询
         if (parsed.language != null && parsed.keywords != null) {
             log.info("[查询] 策略: 语言 + 关键词 → language={}, keywords={}", parsed.language, parsed.keywords);
             var page = projectRepository
