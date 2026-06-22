@@ -12,8 +12,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.IOException;
 import java.util.*;
 
 import static org.springframework.data.mongodb.core.query.Criteria.where;
@@ -98,6 +101,61 @@ public class TigerRagController {
             return R.fail("任务不存在或已过期 (仅保留 10 分钟)");
         }
         return R.ok(task);
+    }
+
+    /**
+     * SSE 流式问答：通过 Server-Sent Events 实时推送 LLM token。
+     * 前端使用 EventSource 或 fetch 读取，无需轮询。
+     */
+    @GetMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamChat(@RequestParam String query,
+                                  @RequestParam(required = false) String sessionId,
+                                  @RequestParam(required = false) Integer topK,
+                                  @RequestParam(required = false) Double minScore) {
+        if (query == null || query.isBlank()) {
+            SseEmitter bad = new SseEmitter(0L);
+            bad.completeWithError(new IllegalArgumentException("query 不能为空"));
+            return bad;
+        }
+
+        SseEmitter emitter = new SseEmitter(120_000L); // 2 min timeout
+
+        // 关键：在独立线程中执行 streamChat，让 Controller 立即返回 emitter。
+        // 否则 streamChat 的同步阻塞会导致所有 emitter.send() 在 emitter 返回前排队，
+        // 最终被一次性 flush，前端看起来就不是流式输出。
+        new Thread(() -> {
+            tigerRagService.streamChat(sessionId, query.trim(), topK, minScore,
+                    // onToken: 逐 token 推送
+                    token -> {
+                        try {
+                            emitter.send(SseEmitter.event().name("token").data(token));
+                        } catch (IOException e) {
+                            emitter.completeWithError(e);
+                        }
+                    },
+                    // onComplete: 推送最终结果 (refs, duration, knowledgeSource 等元数据)
+                    answer -> {
+                        try {
+                            emitter.send(SseEmitter.event().name("done").data(answer));
+                            emitter.complete();
+                        } catch (IOException e) {
+                            emitter.completeWithError(e);
+                        }
+                    },
+                    // onError: 推送错误
+                    error -> {
+                        try {
+                            emitter.send(SseEmitter.event().name("error")
+                                    .data(error.getMessage() != null ? error.getMessage() : "未知错误"));
+                        } catch (IOException ignored) {
+                        } finally {
+                            emitter.completeWithError(error);
+                        }
+                    }
+            );
+        }, "tiger-rag-sse").start();
+
+        return emitter;
     }
 
     private static String truncate(String s, int n) {

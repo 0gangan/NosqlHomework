@@ -87,7 +87,10 @@
 
                 <div class="bubble-wrap">
                   <div class="bubble">
-                    <div v-if="msg.content" class="bubble-content">
+                    <div v-if="msg.role === 'assistant' && msg === lastMsg && streamingContent !== null" class="bubble-content">
+                      <p v-html="renderMarkdown(streamingContent)" />
+                    </div>
+                    <div v-else-if="msg.content" class="bubble-content">
                       <p v-if="msg.role === 'assistant'" v-html="renderMarkdown(msg.content)" />
                       <p v-else>{{ msg.content }}</p>
                     </div>
@@ -165,12 +168,12 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   MagicStick, ChatDotRound, Document, Plus, Delete, Promotion, InfoFilled
 } from '@element-plus/icons-vue'
-import { tigerRagChat, tigerRagStartChat, tigerRagGetTask, tigerRagClearSession } from '../api/tigerRag'
+import { tigerRagStreamChat, tigerRagClearSession } from '../api/tigerRag'
 
 // ===== 会话状态 =====
 // 会话列表：存 localStorage，可切换
@@ -180,6 +183,14 @@ const messages = ref([])
 const messagesRef = ref(null)
 const inputText = ref('')
 const sending = ref(false)
+const streamingContent = ref(null)  // 流式输出的独立 ref，突破 Vue 批量合并
+let activeStream = null  // 当前活跃的 SSE 连接，用于取消
+
+// 计算属性：最后一条消息
+const lastMsg = computed(() => {
+  const msgs = messages.value
+  return msgs.length > 0 ? msgs[msgs.length - 1] : null
+})
 
 const SESSION_STORAGE_KEY = 'tiger-rag-sessions-v1'
 const CURRENT_KEY = 'tiger-rag-current-v1'
@@ -207,6 +218,13 @@ onMounted(() => {
     // 恢复当前会话的消息（从当前进程内的内存存储）
     const cur = sessions.value.find(s => s.id === currentSessionId.value)
     if (cur && cur.messages) messages.value = cur.messages
+  }
+})
+
+onUnmounted(() => {
+  if (activeStream) {
+    activeStream.close()
+    activeStream = null
   }
 })
 
@@ -275,7 +293,7 @@ function handleKey(e) {
   }
 }
 
-// ===== 发送消息 =====
+// ===== 发送消息 (SSE 流式) =====
 async function sendMessage() {
   const q = inputText.value.trim()
   if (!q) return
@@ -296,63 +314,62 @@ async function sendMessage() {
   await nextTick()
   scrollToBottom()
 
-  try {
-    // 1) 先发一次 /chat/start，立刻拿到 taskId
-    const startResp = await tigerRagStartChat({ sessionId: currentSessionId.value, query: q })
-    const taskId = startResp.taskId
-    assistantMsg.content = '正在思考中，请稍候…（0s）'
-
-    // 2) 轮询查询任务结果，最多 2 分钟
-    const MAX_WAIT_MS = 120 * 1000
-    const POLL_INTERVAL_MS = 2000
-    const startTime = Date.now()
-    let result = null
-
-    while (Date.now() - startTime < MAX_WAIT_MS) {
-      const poll = await tigerRagGetTask(taskId)
-      const status = poll && poll.status ? poll.status : (poll && poll.answer ? 'completed' : 'processing')
-
-      if (status === 'completed') {
-        result = poll.answer || poll
-        break
-      }
-      if (status === 'failed' || status === 'expired') {
-        throw new Error(poll.errorMsg || '任务失败，请重试')
-      }
-
-      // 还在处理：更新气泡提示，让用户知道已等待多久
-      const elapsedSec = Math.round((Date.now() - startTime) / 1000)
-      assistantMsg.content = '正在思考中，请稍候…（' + elapsedSec + 's）'
-      await nextTick()
-      scrollToBottom()
-
-      await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS))
-    }
-
-    if (!result) {
-      throw new Error('等待超时，请重试')
-    }
-
-    assistantMsg.content = result.answer
-    assistantMsg.refs = result.refs || []
-    assistantMsg.usedKnowledge = result.usedKnowledge
-    assistantMsg.knowledgeSource = result.knowledgeSource
-    assistantMsg.durationMs = result.durationMs
-
-    // 更新 session title（用首条用户消息的前 20 字当标题）
-    const cur = sessions.value.find(s => s.id === currentSessionId.value)
-    if (cur && cur.title && cur.title.startsWith('新对话')) {
-      cur.title = q.slice(0, 20) + (q.length > 20 ? '...' : '')
-    }
-  } catch (e) {
-    assistantMsg.content = '抱歉，回答失败: ' + (e.message || '未知错误')
-    assistantMsg.usedKnowledge = false
-  } finally {
-    sending.value = false
-    saveSessionsToLocal()
-    await nextTick()
-    scrollToBottom()
+  // 断开之前的 SSE 连接（如果有）
+  if (activeStream) {
+    activeStream.close()
+    activeStream = null
   }
+
+  let firstToken = true
+
+  activeStream = tigerRagStreamChat({
+    query: q,
+    sessionId: currentSessionId.value,
+    onToken: (token) => {
+      if (firstToken) {
+        streamingContent.value = ''
+        firstToken = false
+      }
+      streamingContent.value += token
+    },
+    onDone: (answer) => {
+      activeStream = null
+      // 将流式内容迁移到消息对象
+      assistantMsg.content = streamingContent.value || ''
+      streamingContent.value = null
+      if (answer && answer.refs) {
+        assistantMsg.refs = answer.refs
+      }
+      if (answer) {
+        assistantMsg.usedKnowledge = answer.usedKnowledge
+        assistantMsg.knowledgeSource = answer.knowledgeSource
+        assistantMsg.durationMs = answer.durationMs
+        assistantMsg.highestScore = answer.highestScore
+      }
+      sending.value = false
+
+      // 更新 session title
+      const cur = sessions.value.find(s => s.id === currentSessionId.value)
+      if (cur && cur.title && cur.title.startsWith('新对话')) {
+        cur.title = q.slice(0, 20) + (q.length > 20 ? '...' : '')
+      }
+      saveSessionsToLocal()
+    },
+    onError: (error) => {
+      activeStream = null
+      const text = streamingContent.value || ''
+      streamingContent.value = null
+      assistantMsg.content = text
+      if (!assistantMsg.content) {
+        assistantMsg.content = '抱歉，回答失败: ' + error
+      } else {
+        assistantMsg.content += '\n\n---\n⚠️ 回答中断: ' + error
+      }
+      assistantMsg.usedKnowledge = false
+      sending.value = false
+      saveSessionsToLocal()
+    }
+  })
 }
 
 function scrollToBottom() {

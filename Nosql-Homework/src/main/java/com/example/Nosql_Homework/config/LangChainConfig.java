@@ -2,6 +2,7 @@ package com.example.Nosql_Homework.config;
 
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
+import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -73,6 +74,26 @@ public class LangChainConfig {
                 .build();
 
         log.info("[LangChainConfig] Chat LLM ready: model={}", modelName);
+        return model;
+    }
+
+    @Bean
+    public OpenAiStreamingChatModel streamingChatLanguageModel() {
+        log.info("[LangChainConfig] init Streaming Chat LLM: baseUrl={}, model={}, temp={}, maxTokens={}, timeout={}s",
+                baseUrl, modelName, temperature, maxTokens, timeoutSeconds);
+
+        OpenAiStreamingChatModel model = OpenAiStreamingChatModel.builder()
+                .apiKey(apiKey)
+                .baseUrl(baseUrl)
+                .modelName(modelName)
+                .temperature(temperature)
+                .maxTokens(maxTokens)
+                .timeout(Duration.ofSeconds(timeoutSeconds))
+                .logRequests(true)
+                .logResponses(true)
+                .build();
+
+        log.info("[LangChainConfig] Streaming Chat LLM ready: model={}", modelName);
         return model;
     }
 

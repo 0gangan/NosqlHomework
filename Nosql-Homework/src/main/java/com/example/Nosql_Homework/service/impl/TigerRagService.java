@@ -9,6 +9,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.*;
 
 /**
@@ -65,6 +73,22 @@ public class TigerRagService {
 
     @Value("${tiger.rag.min-score:0.35}")
     private double minScore;
+
+    // ===== 原生 HTTP 流式调用所需配置 =====
+    @Value("${langchain4j.openai.api-key}")
+    private String llmApiKey;
+
+    @Value("${langchain4j.openai.base-url}")
+    private String llmBaseUrl;
+
+    @Value("${langchain4j.openai.model-name}")
+    private String llmModelName;
+
+    @Value("${langchain4j.openai.temperature}")
+    private double llmTemperature;
+
+    @Value("${langchain4j.openai.max-tokens}")
+    private int llmMaxTokens;
 
     /** 历史对话最多纳入几轮 */
     private static final int HISTORY_ROUNDS = 6;
@@ -254,6 +278,420 @@ public class TigerRagService {
     /** 旧签名兼容：调用新签名走默认 topK/minScore */
     public RagAnswer chat(String sessionId, String query) {
         return chat(sessionId, query, null, null);
+    }
+
+    /**
+     * 流式 RAG 问答 (SSE)：通过回调逐 token 推送 LLM 返回内容。
+     * 检索逻辑与 {@link #chat(String, String, Integer, Double)} 完全一致，
+     * 区别在于 LLM 调用使用 OpenAiStreamingChatModel。
+     */
+    public void streamChat(String sessionId, String query, Integer reqTopK, Double reqMinScore,
+                           java.util.function.Consumer<String> onToken,
+                           java.util.function.Consumer<RagAnswer> onComplete,
+                           java.util.function.Consumer<Throwable> onError) {
+
+        long start = System.currentTimeMillis();
+        if (query == null || query.isBlank()) {
+            onError.accept(new IllegalArgumentException("问题不能为空"));
+            return;
+        }
+
+        final int k = reqTopK != null && reqTopK > 0 ? reqTopK : topK;
+        final double ms = reqMinScore != null && reqMinScore >= 0 && reqMinScore <= 1 ? reqMinScore : minScore;
+
+        log.info("[Tiger-RAG-stream] ========== 开始流式回答 ==========");
+        log.info("[Tiger-RAG-stream] session={}, 问题: {}, topK={}, minScore={}", sessionId, truncate(query, 120), k, ms);
+
+        // ---------- 意图路由 ----------
+        QueryIntent intent = extractQueryIntent(query);
+
+        // ---------- 数据检索 ----------
+        List<VectorSearchService.ScoredProject> refs;
+        String searchMethod = "vector";
+        long vsStart = System.currentTimeMillis();
+        try {
+            if (intent != null && intent.isStructured()) {
+                if (intent.filterField != null) {
+                    refs = vectorSearchService.queryFiltered(
+                            intent.filterField, intent.filterValue,
+                            intent.sortField, intent.sortDesc, k);
+                    searchMethod = "filter";
+                } else {
+                    refs = vectorSearchService.querySorted(intent.sortField, intent.sortDesc, k);
+                    searchMethod = "rank";
+                }
+            } else {
+                refs = vectorSearchService.searchByText(query, k, ms);
+            }
+            log.info("[Tiger-RAG-stream] 命中 {} 个项目 (模式={}, 耗时 {}ms)", refs.size(), searchMethod, System.currentTimeMillis() - vsStart);
+        } catch (Exception e) {
+            log.error("[Tiger-RAG-stream] 向量检索失败: {}", e.getMessage(), e);
+            refs = new ArrayList<>();
+        }
+
+        double highestScore = 0.0;
+        if (refs != null && !refs.isEmpty()) {
+            for (VectorSearchService.ScoredProject r : refs) {
+                if (r.getScore() != null && r.getScore() > highestScore) highestScore = r.getScore();
+            }
+        }
+        boolean isStructured = !"vector".equals(searchMethod);
+        boolean strongRefs = isStructured || (!refs.isEmpty() && highestScore >= 0.55);
+        boolean weakRefs = !isStructured && !refs.isEmpty() && highestScore >= 0.3 && highestScore < 0.55;
+        boolean hasKnowledge = strongRefs;
+
+        // ---------- 组装 Prompt (拆分为 system + user) ----------
+        // 复用 buildPrompt 的逻辑，但把 system 和 user 部分分开
+        String systemPart = buildSystemPromptPart(strongRefs, weakRefs, isStructured, highestScore, refs);
+        String userPart = buildUserPromptPart(sessionId, query, refs, strongRefs, weakRefs, isStructured, highestScore);
+
+        log.debug("[Tiger-RAG-stream] systemPrompt 长度={} chars, userPrompt 长度={} chars",
+                systemPart.length(), userPart.length());
+
+        // ---------- 调用流式大模型 (原生 HTTP SSE，绕过 LangChain4j 流式 API) ----------
+        final List<VectorSearchService.ScoredProject> finalRefs = refs;
+        final boolean finalHasKnowledge = hasKnowledge;
+        final boolean finalIsStructured = isStructured;
+        final boolean finalStrongRefs = strongRefs;
+        final boolean finalWeakRefs = weakRefs;
+        final double finalHighestScore = highestScore;
+
+        StringBuilder fullAnswer = new StringBuilder();
+
+        try {
+            // 构造 OpenAI 兼容的 chat/completions 请求体
+            String chatEndpoint = llmBaseUrl.replaceAll("/+$", "");
+            if (!chatEndpoint.endsWith("/v1") && !chatEndpoint.contains("/v1/")) {
+                chatEndpoint += "/v1";
+            }
+            chatEndpoint += "/chat/completions";
+
+            // 构建 messages JSON
+            StringBuilder messagesJson = new StringBuilder();
+            messagesJson.append("[");
+            messagesJson.append("{\"role\":\"system\",\"content\":").append(jsonEscape(systemPart)).append("},");
+            messagesJson.append("{\"role\":\"user\",\"content\":").append(jsonEscape(userPart)).append("}");
+            messagesJson.append("]");
+
+            String body = String.format(
+                    "{\"model\":\"%s\",\"messages\":%s,\"temperature\":%.1f,\"max_tokens\":%d,\"stream\":true}",
+                    llmModelName, messagesJson.toString(), llmTemperature, llmMaxTokens);
+
+            log.debug("[Tiger-RAG-stream] HTTP POST {} body length={}", chatEndpoint, body.length());
+
+            HttpClient httpClient = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(30))
+                    .build();
+
+            HttpRequest httpRequest = HttpRequest.newBuilder()
+                    .uri(URI.create(chatEndpoint))
+                    .header("Authorization", "Bearer " + llmApiKey)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "text/event-stream")
+                    .timeout(Duration.ofSeconds(120))
+                    .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                    .build();
+
+            HttpResponse<java.io.InputStream> httpResponse = httpClient.send(httpRequest,
+                    HttpResponse.BodyHandlers.ofInputStream());
+
+            int statusCode = httpResponse.statusCode();
+            if (statusCode != 200) {
+                String errorBody = new String(httpResponse.body().readAllBytes(), StandardCharsets.UTF_8);
+                log.error("[Tiger-RAG-stream] LLM API 返回 HTTP {}: {}", statusCode, errorBody);
+                throw new RuntimeException("LLM API 错误 (HTTP " + statusCode + "): " + errorBody);
+            }
+
+            // 读取 SSE 流，逐行解析
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(httpResponse.body(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.startsWith("data: ")) {
+                        String data = line.substring(6).trim();
+                        if ("[DONE]".equals(data)) {
+                            break;
+                        }
+                        try {
+                            // 简单 JSON 解析：提取 choices[0].delta.content
+                            String token = extractDeltaContent(data);
+                            if (token != null && !token.isEmpty()) {
+                                fullAnswer.append(token);
+                                try {
+                                    onToken.accept(token);
+                                } catch (Exception ignored) {}
+                            }
+                        } catch (Exception parseErr) {
+                            // 忽略单行解析错误，继续读取
+                        }
+                    }
+                }
+            }
+
+            long totalMs = System.currentTimeMillis() - start;
+            log.info("[Tiger-RAG-stream] 流式返回完成, 总耗时 {}ms, 回答长度 {} chars",
+                    totalMs, fullAnswer.length());
+
+            saveHistory(sessionId, query, fullAnswer.toString(), finalRefs, totalMs);
+
+            RagAnswer result = buildRagAnswer(fullAnswer.toString(), sessionId, finalRefs,
+                    finalHasKnowledge, finalIsStructured, finalStrongRefs, finalWeakRefs,
+                    finalHighestScore, totalMs);
+            try {
+                onComplete.accept(result);
+            } catch (Exception ignored) {}
+
+        } catch (Exception e) {
+            log.error("[Tiger-RAG-stream] 流式调用失败: {}", e.getMessage(), e);
+            if (fullAnswer.length() > 0) {
+                saveHistory(sessionId, query, fullAnswer.toString(), finalRefs,
+                        System.currentTimeMillis() - start);
+            }
+            onError.accept(e);
+        }
+    }
+
+    // ========== streamChat 辅助方法 ==========
+
+    /** 构建流式请求的 system prompt 部分 */
+    private String buildSystemPromptPart(boolean strongRefs, boolean weakRefs, boolean isStructured,
+                                          double highestScore, List<VectorSearchService.ScoredProject> refs) {
+        if (isStructured && refs != null && !refs.isEmpty()) {
+            return systemPrompt;
+        } else if (strongRefs) {
+            return systemPrompt;
+        } else {
+            return systemPromptFallback;
+        }
+    }
+
+    /** 构建流式请求的 user prompt 部分 */
+    private String buildUserPromptPart(String sessionId, String query,
+                                        List<VectorSearchService.ScoredProject> refs,
+                                        boolean strongRefs, boolean weakRefs, boolean isStructured,
+                                        double highestScore) {
+        StringBuilder sb = new StringBuilder();
+
+        // ===== 模式 S：结构化查询 =====
+        if (isStructured && refs != null && !refs.isEmpty()) {
+            sb.append("--- 当前为「精确查询模式」(数据库直接排序/过滤) ---\n");
+            sb.append("回答规则:\n");
+            sb.append("1. 下面项目是数据库按指定条件精确返回的结果；\n");
+            sb.append("2. 请基于这些项目回答，如果用户问了排序/筛选问题，直接按列表列出即可；\n");
+            sb.append("3. 涉及项目的 作者/Star数/链接/标签/描述 必须与下面严格一致；\n");
+            sb.append("4. 如果问题超出项目数据范围（如趋势分析），可结合通用知识补充。\n\n");
+            sb.append("【精确查询结果】(共 ").append(refs.size()).append(" 个，非语义匹配)\n\n");
+            appendProjects(sb, refs, false);
+        }
+        // ===== 模式 R：RAG 强相关 =====
+        else if (strongRefs) {
+            sb.append("--- 当前为「项目知识库模式」(最高相似度 ").append(String.format("%.2f", highestScore)).append(") ---\n");
+            sb.append("回答规则:\n");
+            sb.append("1. 主要基于下面【参考项目】中的信息回答，不要编造任何不存在的项目、作者、Star 数或链接；\n");
+            sb.append("2. 如果用户的问题属于预测类、趋势类、主观类，可以结合你的通用知识做分析，但涉及具体项目数据时只以【参考项目】为准；\n");
+            sb.append("3. 不要在回答中显式提到「向量数据库」「embedding」「最高相似度」等实现细节；\n");
+            sb.append("4. 回答简洁、准确；必要时可以用列表、粗体等 Markdown 语法。\n\n");
+            sb.append("【参考项目】(按相关度从高到低)\n");
+            sb.append("注意：你回答中提到的任何「作者 / Star 数 / 链接 / 标签 / 描述」必须严格与下面项目信息一致，否则不要提及。\n\n");
+            appendProjects(sb, refs, true);
+        }
+        // ===== 模式 B：混合模式（弱相关） =====
+        else if (weakRefs) {
+            sb.append("--- 当前为「混合模式」--\n");
+            sb.append("当前知识库中只有 ").append(refs.size()).append(" 个与问题弱相关的项目 (最高相似度 ").append(String.format("%.2f", highestScore)).append(")。\n");
+            sb.append("回答规则:\n");
+            sb.append("1. 以你的通用知识为主来回答用户问题（例如趋势预测、市场分析、技术走向等）；\n");
+            sb.append("2. 下面【参考项目】仅作为补充材料，可选择性提及，但不要把它们当做预测依据来推导结论；\n");
+            sb.append("3. 提到具体项目时，其作者/Star数/链接/标签/描述必须与下面信息一致，否则不要提及；\n");
+            sb.append("4. 回答简洁、有条理，可以用列表、粗体等 Markdown 语法。\n\n");
+            sb.append("【参考项目】(按相关度从高到低，仅作补充)\n\n");
+            appendProjects(sb, refs, false);
+        }
+        // ===== 模式 C：LLM 自身知识 =====
+        else {
+            sb.append("--- 当前为「通用知识模式」---\n");
+            sb.append("项目库中未找到与该问题直接相关的项目。请完全基于你的训练数据和通用知识来回答。\n\n");
+        }
+
+        // ---- 历史对话 ----
+        if (sessionId != null && !sessionId.isBlank()) {
+            List<ChatMessage> history = chatMessageRepo
+                    .findBySessionIdOrderByCreatedAtDesc(sessionId, PageRequest.of(0, HISTORY_ROUNDS * 2))
+                    .getContent();
+            history = new ArrayList<>(history);
+            Collections.reverse(history);
+            if (!history.isEmpty()) {
+                sb.append("【历史对话】\n");
+                for (ChatMessage m : history) {
+                    String role = "user".equals(m.getRole()) ? "用户" : "助手";
+                    sb.append(role).append(": ").append(truncate(m.getContent(), 300)).append("\n");
+                }
+                sb.append("\n");
+            }
+        }
+
+        sb.append("【当前问题】\n").append(query).append("\n\n");
+        sb.append("请给出你的回答：");
+        return sb.toString();
+    }
+
+    /** 把参考项目拼接到 StringBuilder (带相似度或不带) */
+    private void appendProjects(StringBuilder sb, List<VectorSearchService.ScoredProject> refs, boolean withScore) {
+        for (int i = 0; i < refs.size(); i++) {
+            VectorSearchService.ScoredProject r = refs.get(i);
+            if (withScore) {
+                sb.append(String.format("--- 项目 %d (相似度 %.2f) ---\n", i + 1, r.getScore() == null ? 0.0 : r.getScore()));
+            } else {
+                sb.append(String.format("--- 项目 %d ---\n", i + 1));
+            }
+            if (r.getFullName() != null) {
+                sb.append("项目仓库: ").append(r.getFullName()).append("\n");
+                sb.append("项目链接: https://github.com/").append(r.getFullName()).append("\n");
+                int slash = r.getFullName().indexOf('/');
+                if (slash > 0) sb.append("作者: ").append(r.getFullName().substring(0, slash)).append("\n");
+            }
+            if (r.getName() != null) sb.append("项目名称: ").append(r.getName()).append("\n");
+            if (r.getLanguage() != null) sb.append("编程语言: ").append(r.getLanguage()).append("\n");
+            if (r.getCategory() != null) sb.append("分类: ").append(r.getCategory()).append("\n");
+            if (r.getTopics() != null && !r.getTopics().isEmpty())
+                sb.append("标签: ").append(String.join(", ", r.getTopics())).append("\n");
+            if (r.getStarsCount() != null) sb.append("Star 数量: ").append(r.getStarsCount()).append("\n");
+            if (r.getLicense() != null) sb.append("开源协议: ").append(r.getLicense()).append("\n");
+            if (r.getDescription() != null) sb.append("项目描述: ").append(r.getDescription()).append("\n");
+            sb.append("\n");
+        }
+    }
+
+    /** 保存问答历史到 MongoDB */
+    private void saveHistory(String sessionId, String query, String answer,
+                              List<VectorSearchService.ScoredProject> refs, long totalMs) {
+        if (sessionId == null || sessionId.isBlank()) return;
+        try {
+            ChatMessage userMsg = ChatMessage.builder()
+                    .sessionId(sessionId).role("user").content(query)
+                    .createdAt(new Date()).build();
+            chatMessageRepo.save(userMsg);
+
+            List<ChatMessage.RefDocPreview> previews = new ArrayList<>();
+            for (VectorSearchService.ScoredProject r : refs) {
+                previews.add(ChatMessage.RefDocPreview.builder()
+                        .docId(r.getId()).title(r.getFullName())
+                        .category(r.getLanguage()).score(r.getScore())
+                        .snippet(r.getDescription() == null ? "" :
+                                r.getDescription().substring(0, Math.min(200, r.getDescription().length())))
+                        .build());
+            }
+            ChatMessage assistantMsg = ChatMessage.builder()
+                    .sessionId(sessionId).role("assistant").content(answer)
+                    .refDocIds(refs.stream().map(VectorSearchService.ScoredProject::getId).toList())
+                    .refDocsPreview(previews).createdAt(new Date()).durationMs(totalMs).build();
+            chatMessageRepo.save(assistantMsg);
+        } catch (Exception e) {
+            log.warn("[Tiger-RAG-stream] 保存历史失败: {}", e.getMessage());
+        }
+    }
+
+    /** 组装 RagAnswer 返回对象 */
+    private RagAnswer buildRagAnswer(String answer, String sessionId,
+                                      List<VectorSearchService.ScoredProject> refs,
+                                      boolean hasKnowledge, boolean isStructured,
+                                      boolean strongRefs, boolean weakRefs,
+                                      double highestScore, long totalMs) {
+        RagAnswer result = new RagAnswer();
+        result.answer = answer;
+        result.sessionId = sessionId;
+        result.refs = refs.stream().map(r -> {
+            RagRef rr = new RagRef();
+            rr.docId = r.getId();
+            rr.title = r.getFullName();
+            rr.category = r.getLanguage();
+            rr.topics = r.getTopics();
+            rr.license = r.getLicense();
+            rr.score = r.getScore();
+            rr.description = r.getDescription();
+            rr.starsCount = r.getStarsCount();
+            if (r.getFullName() != null) {
+                rr.url = "https://github.com/" + r.getFullName();
+                int slash = r.getFullName().indexOf('/');
+                if (slash > 0) rr.author = r.getFullName().substring(0, slash);
+            }
+            return rr;
+        }).toList();
+        result.durationMs = totalMs;
+        result.usedKnowledge = hasKnowledge;
+        result.highestScore = highestScore;
+        if (isStructured) result.knowledgeSource = "structured";
+        else if (strongRefs) result.knowledgeSource = "rag";
+        else if (weakRefs) result.knowledgeSource = "hybrid";
+        else result.knowledgeSource = "llm";
+        return result;
+    }
+
+    /** JSON 字符串转义 (非常简易，仅处理 " \ \n \r \t) */
+    private static String jsonEscape(String s) {
+        if (s == null) return "\"\"";
+        StringBuilder sb = new StringBuilder("\"");
+        for (char c : s.toCharArray()) {
+            switch (c) {
+                case '"':  sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n");  break;
+                case '\r': sb.append("\\r");  break;
+                case '\t': sb.append("\\t");  break;
+                default:
+                    if (c < 0x20) sb.append(String.format("\\u%04x", (int) c));
+                    else sb.append(c);
+            }
+        }
+        sb.append("\"");
+        return sb.toString();
+    }
+
+    /** 从 SSE data 中提取 choices[0].delta.content (简易版，不依赖 Jackson) */
+    private static String extractDeltaContent(String json) {
+        int idx = json.indexOf("\"content\"");
+        if (idx < 0) return null;
+        idx = json.indexOf(':', idx);
+        if (idx < 0) return null;
+        idx++;
+        while (idx < json.length() && (json.charAt(idx) == ' ' || json.charAt(idx) == '\t')) idx++;
+        if (idx >= json.length()) return null;
+
+        if (json.charAt(idx) == '"') {
+            int start = idx + 1;
+            StringBuilder sb = new StringBuilder();
+            for (int i = start; i < json.length(); i++) {
+                char c = json.charAt(i);
+                if (c == '\\') {
+                    i++;
+                    if (i < json.length()) {
+                        char next = json.charAt(i);
+                        switch (next) {
+                            case 'n': sb.append('\n'); break;
+                            case 'r': sb.append('\r'); break;
+                            case 't': sb.append('\t'); break;
+                            case '\\': sb.append('\\'); break;
+                            case '"': sb.append('"'); break;
+                            case 'u':
+                                if (i + 4 < json.length()) {
+                                    try {
+                                        sb.append((char) Integer.parseInt(json.substring(i + 1, i + 5), 16));
+                                        i += 4;
+                                    } catch (NumberFormatException e) { sb.append('?'); }
+                                }
+                                break;
+                            default: sb.append(next);
+                        }
+                    }
+                } else if (c == '"') {
+                    break;
+                } else {
+                    sb.append(c);
+                }
+            }
+            return sb.toString();
+        }
+        return null;
     }
 
     /**
