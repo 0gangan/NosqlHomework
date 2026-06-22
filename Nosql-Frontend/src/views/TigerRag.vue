@@ -383,7 +383,7 @@ function renderMarkdown(text) {
   // *italic*
   html = html.replace(/(^|\W)\*([^*\n]+)\*/g, '$1<em>$2</em>')
   // `code`
-  html = html.replace(/`([^`\n]+)`/g, '<code style="background:#f5f5f5;padding:1px 6px;border-radius:3px;font-size:13px">$1</code>')
+  html = html.replace(/`([^`\n]+)`/g, '<code style="background:#2a2a4a;color:#f7931e;padding:1px 6px;border-radius:3px;font-size:13px">$1</code>')
   // 换行转 <br/>
   html = html.replace(/\n/g, '<br/>')
   return html
@@ -609,6 +609,7 @@ function renderMarkdown(text) {
 .bubble-content :deep(strong) { color: #f7931e; }
 .bubble-content :deep(code) {
   background: #2a2a4a;
+  color: #f7931e;
   padding: 1px 6px;
   border-radius: 3px;
   font-size: 13px;
