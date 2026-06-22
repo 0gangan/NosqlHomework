@@ -20,6 +20,9 @@ public interface ProjectRepository extends MongoRepository<Project, String> {
 
     Page<Project> findByCategory(String category, Pageable pageable);
 
+    /** 语言 + 分类组合查询 */
+    Page<Project> findByLanguageAndCategory(String language, String category, Pageable pageable);
+
     List<Project> findByOwnerIdOrderByUpdatedAtDesc(String ownerId);
 
     Page<Project> findByLanguageAndStarsCountGreaterThan(String language, Integer minStars, Pageable pageable);

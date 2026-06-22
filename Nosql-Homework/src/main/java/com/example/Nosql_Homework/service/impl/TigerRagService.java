@@ -945,10 +945,12 @@ public class TigerRagService {
         }
 
         // --- 过滤意图（提取语言/协议名） ---
+        // 用 lower case 做匹配，兼容前端输入 "java项目" 也能命中
+        String qLower = q.toLowerCase();
         String[] langPatterns = {"Java", "Python", "JavaScript", "TypeScript", "Go", "Rust",
                 "C++", "C\\#", "C语言", "Ruby", "PHP", "Swift", "Kotlin", "Scala", "R语言"};
         for (String p : langPatterns) {
-            if (q.contains(p) && (q.contains("语言") || q.contains("项目") || q.contains("代码") || q.contains("开发"))) {
+            if (qLower.contains(p.toLowerCase()) && (qLower.contains("语言") || qLower.contains("项目") || qLower.contains("代码") || qLower.contains("开发"))) {
                 intent.filterField = "language";
                 intent.filterValue = p.replace("\\#", "#").replace("R语言", "R");
                 break;
@@ -959,9 +961,9 @@ public class TigerRagService {
             String[] simpleLangs = {"Java", "Python", "JavaScript", "TypeScript", "Go", "Rust",
                     "C++", "C#", "Ruby", "PHP", "Swift", "Kotlin", "Scala"};
             for (String l : simpleLangs) {
-                if (q.contains(l)) {
+                if (qLower.contains(l.toLowerCase())) {
                     // 确认是编程语言而不是普通词汇（后面跟 项目/库/代码 或前面有 用/写/开发/语言）
-                    if (looksLikeLangQuery(q, l)) {
+                    if (looksLikeLangQuery(qLower, l.toLowerCase())) {
                         intent.filterField = "language";
                         intent.filterValue = l;
                         break;

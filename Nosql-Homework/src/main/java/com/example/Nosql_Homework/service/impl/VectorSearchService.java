@@ -286,7 +286,13 @@ public class VectorSearchService {
         String mongoSort = sortFieldToMongo(sortField);
         if (mongoFilter == null) return new ArrayList<>();
 
-        Document filterDoc = new Document(mongoFilter, new Document("$regex", filterValue).append("$options", "i"));
+        // language 用 ^$ 锚定精确匹配 + 忽略大小写，避免 "Java" 误匹配 "JavaScript"，同时兼容 "java"/"JAVA"
+        Document filterDoc;
+        if ("language".equals(filterField)) {
+            filterDoc = new Document(mongoFilter, new Document("$regex", "^" + filterValue + "$").append("$options", "i"));
+        } else {
+            filterDoc = new Document(mongoFilter, new Document("$regex", filterValue).append("$options", "i"));
+        }
         Document sortDoc = mongoSort != null ? new Document(mongoSort, desc ? -1 : 1) : new Document("stars_count", -1);
         Document projectDoc = buildProjection();
 

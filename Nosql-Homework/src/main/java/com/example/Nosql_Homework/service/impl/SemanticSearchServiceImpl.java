@@ -178,7 +178,15 @@ public class SemanticSearchServiceImpl implements SemanticSearchService {
     private List<Project> queryProjects(ParsedIntent parsed, int topK) {
         PageRequest pageable = PageRequest.of(0, topK);
 
-        // 优先按分类查询（后端预定义分类，精准匹配）
+        // 语言 + 分类组合查询（避免只按分类查丢失语言条件）
+        if (parsed.language != null && parsed.category != null) {
+            log.info("[查询] 策略: 语言 + 分类 → language={}, category={}", parsed.language, parsed.category);
+            var page = projectRepository.findByLanguageAndCategory(parsed.language, parsed.category, pageable);
+            log.info("[查询] 语言+分类组合查询命中 {} 条 (总数: {})", page.getContent().size(), page.getTotalElements());
+            return page.getContent();
+        }
+
+        // 仅按分类查询
         if (parsed.category != null) {
             log.info("[查询] 策略: 分类 → category={}", parsed.category);
             var page = projectRepository.findByCategory(parsed.category, pageable);
