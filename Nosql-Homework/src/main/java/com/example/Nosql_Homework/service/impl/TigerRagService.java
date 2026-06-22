@@ -52,13 +52,17 @@ public class TigerRagService {
         private long finishedAt;   // 任务完成时间
     }
 
-    /** RAG 模式提示词：有知识库数据时使用，可做项目查询 + 分析预测 */
-    @Value("${tiger.rag.system-prompt:你是一个叫 Tiger 的智能技术分析师，擅长结合 GitHub 开源项目数据和你的技术知识为用户提供专业见解。\\n你可以：\\n- 查询 GitHub 项目（描述、Star 数、作者、链接、标签、语言、协议、创建时间、Fork 数）；\\n- 做技术对比、项目评估、推荐项目；\\n- 做行业趋势分析（如编程语言热度、框架走势、生态变化等）；\\n- 做预测和展望（基于现有数据进行合理推断）。\\n请严格遵守：\\n1. 当有项目数据时，涉及该项目的具体信息必须严格从中提取，不得编造；\\n2. 做趋势分析、预测、对比、排名时，如有项目数据可作为佐证则引用，无匹配数据时使用你训练期间积累的行业常识；\\n3. 保持回答条理清晰、有数据支撑的地方请给出数据。}")
+    /** RAG 模式提示词：有知识库数据时使用，可做项目查询 + 分析预测 + 生成报告 */
+    @Value("${tiger.rag.system-prompt:你是一个叫 Tiger 的智能技术分析师，擅长结合 GitHub 开源项目数据和你的技术知识为用户提供专业见解。\\n你可以：\\n- 查询 GitHub 项目（描述、Star 数、作者、链接、标签、语言、协议、创建时间、Fork 数）；\\n- 做技术对比、项目评估、推荐项目；\\n- 做行业趋势分析（如编程语言热度、框架走势、生态变化等）；\\n- 做预测和展望（基于现有数据进行合理推断）；\\n- 生成项目分布报告、趋势报告等。\\n请严格遵守：\\n1. 当有项目数据或统计数据时，涉及具体数字（项目数、Star 数、作者等）必须严格从中提取，不得编造；\\n2. 做趋势分析、预测、对比、排名时，如有项目数据可作为佐证则引用，无匹配数据时使用你训练期间积累的行业常识；\\n3. 回答中不要提及你的数据来源或后台检索过程（如『数据库』『检索』『项目库』『相似度』『命中』『模式』等），直接以分析内容本身呈现；\\n4. 保持回答条理清晰、有数据支撑的地方请给出数据，必要时使用列表、粗体、小标题等 Markdown 语法。}")
     private String systemPrompt;
 
     /** 降级模式提示词：知识库无匹配数据时使用，允许 LLM 依赖自身训练数据做分析类回答 */
-    @Value("${tiger.rag.system-prompt-fallback:你是一个叫 Tiger 的智能技术分析师，可以回答用户的各类问题。\\n项目库中没有找到与该问题匹配的项目数据，请基于你的训练数据和你训练期间积累的行业知识、常识来回答。\\n你可以做：技术分析、趋势预测、语言对比、项目推荐、市场评估、历史回顾等各类分析类问题。\\n回答要求：\\n1. 不要编造不存在的 GitHub 项目名称、作者、Star 数或链接；\\n2. 回答开头可以简短说明「项目库中暂无匹配项目，以下基于通用知识和行业经验为你回答」；\\n3. 回答条理清晰、结构分明，必要时使用列表、粗体。}")
+    @Value("${tiger.rag.system-prompt-fallback:你是一个叫 Tiger 的智能技术分析师，可以回答用户的各类问题。\\n你可以做：技术分析、趋势预测、语言对比、项目推荐、市场评估、历史回顾、报告撰写等各类分析类问题。\\n回答要求：\\n1. 不要编造不存在的 GitHub 项目名称、作者、Star 数或链接；\\n2. 回答简洁、直接，不要提及你参考了什么数据来源或检索过程，直接给出分析内容；\\n3. 回答条理清晰、结构分明，必要时使用列表、粗体、小标题等 Markdown 语法；\\n4. 如果用户问到具体开源项目且你不确定其是否存在或具体数字，使用『据我了解』、『行业普遍认为』等表述，不要给出确切但不存在的项目名或数字。}")
     private String systemPromptFallback;
+
+    /** 报告模式提示词：当系统已主动聚合出统计数据时使用 */
+    @Value("${tiger.rag.system-prompt-report:你是一个叫 Tiger 的技术报告撰写者。下面提供了一份统计摘要（按语言聚合、附 Top 项目等信息），请把它写成一份结构清晰、可读性强的报告。\\n报告要求：\\n1. 有明确的小标题（例如『概况』『各语言分布 TOP N』『分析与趋势总结』等，根据数据灵活调整，不要机械套模板）；\\n2. 数据与项目名、作者、Star 数必须严格与下面的统计数据一致，不要编造项目、不要虚构数字；\\n3. 适当使用粗体、列表等 Markdown 语法，条理清晰、层次分明；\\n4. 报告要简洁、有信息量，不要空泛套话；\\n5. 在末尾写一段简短的『分析与趋势总结』，结合你对编程语言生态的理解，从项目数量、Star 集中度等角度给出分析，但不要编造数据；\\n6. 回答中不要提及数据来源（如『项目库』『数据库』『检索』等），直接呈现报告内容本身。}")
+    private String systemPromptReport;
 
     @Value("${tiger.rag.top-k:15}")
     private int topK;
@@ -86,15 +90,26 @@ public class TigerRagService {
         log.info("[Tiger-RAG] ========== 开始回答 ==========");
         log.info("[Tiger-RAG] session={}, 问题: {}, topK={}, minScore={}", sessionId, truncate(query, 120), k, ms);
 
-        // ---------- (0.5) 问题路由：先识别是否为结构化查询 ----------
+        // ---------- (0.5) 问题路由：先识别是否为结构化查询 / 报告查询 ----------
         QueryIntent intent = extractQueryIntent(query);
+        boolean isReport = intent != null && intent.isReport();
 
         // ---------- (1) 数据检索 (按意图分派) ----------
         List<VectorSearchService.ScoredProject> refs;
         String searchMethod = "vector";
+        String reportSummary = null;   // 报告模式下使用
         long vsStart = System.currentTimeMillis();
         try {
-            if (intent != null && intent.isStructured()) {
+            // ===== 报告模式：不做向量检索，改为按语言聚合统计 =====
+            if (isReport) {
+                searchMethod = "report";
+                reportSummary = vectorSearchService.buildLanguageReport(10, 3);
+                refs = new ArrayList<>();
+                log.info("[Tiger-RAG] 报告模式，统计摘要长度={} chars, 耗时 {}ms",
+                        reportSummary == null ? 0 : reportSummary.length(),
+                        System.currentTimeMillis() - vsStart);
+            }
+            else if (intent != null && intent.isStructured()) {
                 if (intent.filterField != null) {
                     // 过滤 + 排序 (如 "Java项目 Star最多")
                     refs = vectorSearchService.queryFiltered(
@@ -110,16 +125,18 @@ public class TigerRagService {
                 // 默认向量检索
                 refs = vectorSearchService.searchByText(query, k, ms);
             }
-            log.info("[Tiger-RAG] 命中 {} 个项目 (模式={}, 耗时 {}ms)", refs.size(), searchMethod, System.currentTimeMillis() - vsStart);
-            if (refs.isEmpty() && "vector".equals(searchMethod)) {
-                Map<String, Object> health = vectorSearchService.indexHealth();
-                log.warn("[Tiger-RAG] ⚠️ 未命中任何项目。当前索引状态: {}", health);
+            if (!isReport) {
+                log.info("[Tiger-RAG] 命中 {} 个项目 (模式={}, 耗时 {}ms)", refs.size(), searchMethod, System.currentTimeMillis() - vsStart);
+                if (refs.isEmpty() && "vector".equals(searchMethod)) {
+                    Map<String, Object> health = vectorSearchService.indexHealth();
+                    log.warn("[Tiger-RAG] ⚠️ 未命中任何项目。当前索引状态: {}", health);
+                }
             }
         } catch (Exception e) {
             long cost = System.currentTimeMillis() - vsStart;
             Throwable root = e;
             while (root.getCause() != null && root.getCause() != root) root = root.getCause();
-            log.error("[Tiger-RAG] 向量检索失败: 异常类型={}, 消息={}, rootCause={}, 消息={}, topK={}, minScore={}, 耗时={}ms",
+            log.error("[Tiger-RAG] 数据检索失败: 异常类型={}, 消息={}, rootCause={}, 消息={}, topK={}, minScore={}, 耗时={}ms",
                     e.getClass().getSimpleName(), e.getMessage(),
                     root.getClass().getSimpleName(), root.getMessage(),
                     k, ms, cost, e);
@@ -127,23 +144,23 @@ public class TigerRagService {
         }
 
         // 计算检索结果最高相似度 score
-        // 注意：结构化查询（rank/filter）的 score 恒为 1.0，此时强相关判定不再基于 score
+        // 注意：结构化查询（rank/filter）的 score 恒为 1.0，报告（report）模式无单个项目
         double highestScore = 0.0;
         if (refs != null && !refs.isEmpty()) {
             for (VectorSearchService.ScoredProject r : refs) {
                 if (r.getScore() != null && r.getScore() > highestScore) highestScore = r.getScore();
             }
         }
-        boolean isStructured = !"vector".equals(searchMethod);
-        // 结构化查询 → 直接当强相关处理（因为是精确查数据库）；向量查询 → 按 score 分档
-        boolean strongRefs = isStructured || (!refs.isEmpty() && highestScore >= 0.55);
+        boolean isStructured = !"vector".equals(searchMethod); // 报告/结构化查询都视为"强相关"
+        // 报告模式 → 强相关；结构化查询 → 强相关；向量查询 → 按 score 分档
+        boolean strongRefs = isReport || isStructured || (!refs.isEmpty() && highestScore >= 0.55);
         boolean weakRefs = !isStructured && !refs.isEmpty() && highestScore >= 0.3 && highestScore < 0.55;
         boolean hasKnowledge = strongRefs;
 
         // ---------- (2) 组装 Prompt ----------
-        String fullPrompt = buildPrompt(sessionId, query, refs, highestScore, strongRefs, weakRefs, isStructured);
-        log.debug("[Tiger-RAG] Prompt 长度: {} chars, highestScore={}, strongRefs={}, weakRefs={}",
-                fullPrompt.length(), highestScore, strongRefs, weakRefs);
+        String fullPrompt = buildPrompt(sessionId, query, refs, reportSummary, highestScore, strongRefs, weakRefs, isStructured, isReport);
+        log.debug("[Tiger-RAG] Prompt 长度: {} chars, highestScore={}, strongRefs={}, weakRefs={}, isReport={}",
+                fullPrompt.length(), highestScore, strongRefs, weakRefs, isReport);
 
         // ---------- (3) 调用大模型 ----------
         String answer;
@@ -242,9 +259,9 @@ public class TigerRagService {
         result.durationMs = totalMs;
         result.usedKnowledge = hasKnowledge;
         result.highestScore = highestScore;
-        // rag = 强相关项目；hybrid = 有弱相关项目；llm = 无相关项目
-        // rag = 强相关项目；structured = 精确查询；hybrid = 弱相关项目；llm = 无匹配
-        if (isStructured) result.knowledgeSource = "structured";
+        // report = 报告（统计聚合）；structured = 精确查询；rag = 强相关项目；hybrid = 弱相关项目；llm = 无匹配
+        if (isReport) result.knowledgeSource = "report";
+        else if (isStructured) result.knowledgeSource = "structured";
         else if (strongRefs) result.knowledgeSource = "rag";
         else if (weakRefs) result.knowledgeSource = "hybrid";
         else result.knowledgeSource = "llm";
@@ -336,27 +353,42 @@ public class TigerRagService {
 
     /**
      * 组装给大模型的完整 Prompt。
-     * 四模式：
+     * 模式（优先级从高到低：
+     *   报告模式 (isReport)：已主动聚合出统计数据（项目数/Star分布等
      *   结构化模式 (isStructured)：结果来自数据库精确排序/过滤
      *   RAG 模式 (strongRefs)：有强相关向量检索结果
      *   混合模式 (weakRefs)：有弱相关向量检索结果
      *   LLM 模式 (其他)：项目库无匹配
      */
     private String buildPrompt(String sessionId, String query, List<VectorSearchService.ScoredProject> refs,
-                               double highestScore, boolean strongRefs, boolean weakRefs, boolean isStructured) {
+                               String reportSummary,
+                               double highestScore, boolean strongRefs, boolean weakRefs, boolean isStructured,
+                               boolean isReport) {
         StringBuilder sb = new StringBuilder();
 
-        // ===== 模式 S：结构化查询（精确排序/过滤） =====
-        if (isStructured && refs != null && !refs.isEmpty()) {
-            sb.append(systemPrompt).append("\n\n");
-            sb.append("--- 当前为「精确查询模式」(数据库直接排序/过滤) ---\n");
+        // ===== 模式 Rpt：报告模式 =====
+        if (isReport) {
+            sb.append(systemPromptReport).append("\n\n");
+            sb.append("用户问题：").append(query).append("\n");
             sb.append("回答规则:\n");
-            sb.append("1. 下面项目是数据库按指定条件精确返回的结果；\n");
-            sb.append("2. 请基于这些项目回答，如果用户问了排序/筛选问题，直接按列表列出即可；\n");
-            sb.append("3. 涉及项目的 作者/Star数/链接/标签/描述 必须与下面严格一致；\n");
-            sb.append("4. 如果问题超出项目数据范围（如趋势分析），可结合通用知识补充。\n\n");
+            sb.append("1. 下面的统计数据是真实的，报告中涉及的项目数、Star 数、项目名必须严格与下面一致；\n");
+            sb.append("2. 报告中涉及的项目名、作者、Star 数等数据必须严格与下面一致，不要编造项目；\n");
+            sb.append("3. 报告末尾的『分析与趋势总结』可以结合你对编程语言生态的理解进行分析，但不要虚构数字。\n\n");
 
-            sb.append("【精确查询结果】(共 ").append(refs.size()).append(" 个，非语义匹配)\n\n");
+            if (reportSummary != null && !reportSummary.isBlank()) {
+                sb.append("【统计数据】\n").append(reportSummary).append("\n\n");
+            }
+        }
+        // ===== 模式 S：结构化查询（精确排序/过滤） =====
+        else if (isStructured && refs != null && !refs.isEmpty()) {
+            sb.append(systemPrompt).append("\n\n");
+            sb.append("以下是为用户问题匹配到的相关项目信息，供你参考使用。\n\n");
+            sb.append("回答规则:\n");
+            sb.append("1. 下面项目的作者/Star数/链接/标签/描述 必须与下面严格一致；\n");
+            sb.append("2. 请基于这些项目回答，如果用户问了排序/筛选问题，直接按列表列出即可；\n");
+            sb.append("3. 如果问题超出项目数据范围（如趋势分析），可结合通用知识补充。\n\n");
+
+            sb.append("【相关项目】\n\n");
             for (int i = 0; i < refs.size(); i++) {
                 VectorSearchService.ScoredProject r = refs.get(i);
                 sb.append(String.format("--- 项目 %d ---\n", i + 1));
@@ -380,18 +412,17 @@ public class TigerRagService {
         // ===== 模式 R：RAG 强相关 =====
         else if (strongRefs) {
             sb.append(systemPrompt).append("\n\n");
-            sb.append("--- 当前为「项目知识库模式」(最高相似度 ").append(String.format("%.2f", highestScore)).append(") ---\n");
+            sb.append("以下是为用户问题匹配到的相关项目信息。\n\n");
             sb.append("回答规则:\n");
             sb.append("1. 主要基于下面【参考项目】中的信息回答，不要编造任何不存在的项目、作者、Star 数或链接；\n");
             sb.append("2. 如果用户的问题属于预测类、趋势类、主观类（如『预测明年趋势』），可以结合你的通用知识做分析，但涉及具体项目数据时只以【参考项目】为准；\n");
-            sb.append("3. 不要在回答中显式提到「向量数据库」「embedding」「最高相似度」等实现细节；\n");
-            sb.append("4. 回答简洁、准确；必要时可以用列表、粗体等 Markdown 语法。\n\n");
+            sb.append("3. 回答简洁、准确；必要时可以用列表、粗体等 Markdown 语法。\n\n");
 
-            sb.append("【参考项目】(按相关度从高到低)\n");
+            sb.append("【参考项目】\n");
             sb.append("注意：你回答中提到的任何「作者 / Star 数 / 链接 / 标签 / 描述」必须严格与下面项目信息一致，否则不要提及。\n\n");
             for (int i = 0; i < refs.size(); i++) {
                 VectorSearchService.ScoredProject r = refs.get(i);
-                sb.append(String.format("--- 项目 %d (相似度 %.2f) ---\n", i + 1, r.getScore() == null ? 0.0 : r.getScore()));
+                sb.append(String.format("--- 项目 %d ---\n", i + 1));
                 if (r.getFullName() != null) {
                     sb.append("项目仓库: ").append(r.getFullName()).append("\n");
                     sb.append("项目链接: https://github.com/").append(r.getFullName()).append("\n");
@@ -409,21 +440,20 @@ public class TigerRagService {
                 sb.append("\n");
             }
         }
-        // ===== 模式 B：混合模式（弱相关） =====
+        // ===== 模式 B：混合模式（信息来源通用知识为主） =====
         else if (weakRefs) {
             sb.append(systemPromptFallback).append("\n\n");
-            sb.append("--- 当前为「混合模式」--\n");
-            sb.append("当前知识库中只有 ").append(refs.size()).append(" 个与问题弱相关的项目 (最高相似度 ").append(String.format("%.2f", highestScore)).append(")。\n");
+            sb.append("以下项目信息可作为补充参考。回答以你的通用知识为主。\n\n");
             sb.append("回答规则:\n");
             sb.append("1. 以你的通用知识为主来回答用户问题（例如趋势预测、市场分析、技术走向等）；\n");
-            sb.append("2. 下面【参考项目】仅作为补充材料，可选择性提及，但不要把它们当做预测依据来推导结论；\n");
+            sb.append("2. 下面【参考项目】仅作为补充材料，可选择性提及；\n");
             sb.append("3. 提到具体项目时，其作者/Star数/链接/标签/描述必须与下面信息一致，否则不要提及；\n");
             sb.append("4. 回答简洁、有条理，可以用列表、粗体等 Markdown 语法。\n\n");
 
-            sb.append("【参考项目】(按相关度从高到低，仅作补充)\n\n");
+            sb.append("【参考项目】\n\n");
             for (int i = 0; i < refs.size(); i++) {
                 VectorSearchService.ScoredProject r = refs.get(i);
-                sb.append(String.format("--- 项目 %d (相似度 %.2f) ---\n", i + 1, r.getScore() == null ? 0.0 : r.getScore()));
+                sb.append(String.format("--- 项目 %d ---\n", i + 1));
                 if (r.getFullName() != null) {
                     sb.append("项目仓库: ").append(r.getFullName()).append("\n");
                     sb.append("项目链接: https://github.com/").append(r.getFullName()).append("\n");
@@ -438,8 +468,7 @@ public class TigerRagService {
         // ===== 模式 C：LLM 自身知识 =====
         else {
             sb.append(systemPromptFallback).append("\n\n");
-            sb.append("--- 当前为「通用知识模式」---\n");
-            sb.append("项目库中未找到与该问题直接相关的项目。请完全基于你的训练数据和通用知识来回答。\n\n");
+            sb.append("请直接基于你的知识回答用户问题。\n\n");
         }
 
         // ---- 历史对话 (三种模式共用) ----
@@ -487,6 +516,14 @@ public class TigerRagService {
         String q = query.trim();
 
         QueryIntent intent = new QueryIntent();
+
+        // --- 报告/统计意图（优先级最高，优先命中） ---
+        // 识别："报告" "统计" "分析" "分布" "汇总" 等关键词
+        if (containsAny(q, "报告", "统计", "分析", "分布", "汇总", "report", "summary", "总结", "概况")) {
+            // 要求用户问题中提到"项目/语言/代码/仓库"等暗示的领域，否则仍按普通问答走
+            // 这里放宽：一旦命中"报告/统计"即视为报告意图
+            intent.report = true;
+        }
 
         // --- 排序意图 ---
         if (containsAny(q, "star", "tar", "星", "关注", "最火", "热门", "受欢迎", "最多人",
@@ -544,7 +581,7 @@ public class TigerRagService {
             }
         }
 
-        return intent.isStructured() ? intent : null;
+        return (intent.isStructured() || intent.isReport()) ? intent : null;
     }
 
     /** 判断 query 中的 lang 是否真的在表达"找某个语言的项目" */
@@ -576,9 +613,14 @@ public class TigerRagService {
         String filterValue;  // "Java" / "MIT" / null
         String sortField;    // "stars_count" / "created_at" / "pushed_at" / null
         boolean sortDesc;
+        boolean report;     // 是否为报告/统计意图
 
         boolean isStructured() {
             return sortField != null || filterField != null;
+        }
+
+        boolean isReport() {
+            return report;
         }
     }
 

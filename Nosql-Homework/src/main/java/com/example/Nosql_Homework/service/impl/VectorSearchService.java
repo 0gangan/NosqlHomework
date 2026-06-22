@@ -381,6 +381,137 @@ public class VectorSearchService {
         private Double score;
     }
 
+    // ========== 报告/统计类能力 ==========
+
+    /**
+     * 生成"各编程语言项目分布情况"的统计摘要，供 LLM 写成报告。
+     * 返回一段纯文本（已经排版好，直接拼入 Prompt 即可），包含：
+     *   - 项目总数
+     *   - 各语言的项目数 / Star 总数 / 平均 Star 数（按项目数降序，取前 N 名 + 其他合并）
+     *   - 各语言下的热门项目（每语言 top 3）
+     */
+    public String buildLanguageReport(int topLanguages, int topProjectsPerLanguage) {
+        try {
+            MongoDatabase db = mongoTemplate.getMongoDatabaseFactory().getMongoDatabase();
+            MongoCollection<Document> col = db.getCollection(COLLECTION);
+
+            long totalProjects = col.countDocuments();
+
+            // --- 1) 按语言聚合：项目数、Star 总数、平均 Star ---
+            List<Document> langStats = new ArrayList<>();
+            for (Document doc : col.aggregate(Arrays.asList(
+                    new Document("$match", new Document("language", new Document("$exists", true).append("$ne", ""))),
+                    new Document("$group", new Document("_id", "$language")
+                            .append("projectCount", new Document("$sum", 1))
+                            .append("totalStars", new Document("$sum", new Document("$ifNull", Arrays.asList("$stars_count", 0))))
+                            .append("avgStars", new Document("$avg", new Document("$ifNull", Arrays.asList("$stars_count", 0))))
+                            .append("totalForks", new Document("$sum", new Document("$ifNull", Arrays.asList("$forks_count", 0))))),
+                    new Document("$sort", new Document("projectCount", -1))
+            ))) {
+                langStats.add(doc);
+            }
+
+            if (langStats.isEmpty()) {
+                return "（暂无足够数据完成统计，请用通用知识回答用户。）";
+            }
+
+            long projectsWithLanguage = 0;
+            long totalStarsAll = 0;
+            for (Document d : langStats) {
+                projectsWithLanguage += d.getInteger("projectCount", 0);
+                totalStarsAll += d.getInteger("totalStars", 0);
+            }
+
+            // --- 2) 取 top N 语言，其余合并为 "其他" ---
+            int topN = Math.min(topLanguages, langStats.size());
+            List<Document> topLangs = new ArrayList<>(langStats.subList(0, topN));
+
+            long otherProjects = 0;
+            long otherStars = 0;
+            for (int i = topN; i < langStats.size(); i++) {
+                otherProjects += langStats.get(i).getInteger("projectCount", 0);
+                otherStars += langStats.get(i).getInteger("totalStars", 0);
+            }
+
+            // --- 3) 为每个 top 语言再抓 top 项目 ---
+            StringBuilder sb = new StringBuilder();
+            sb.append("【概况】共 ").append(totalProjects).append(" 个项目，");
+            sb.append("其中 ").append(projectsWithLanguage).append(" 个项目有编程语言信息，Star 总数 ").append(totalStarsAll).append("。\n\n");
+
+            sb.append("【各语言分布（按项目数降序，前 ").append(topN).append(" 名）】\n");
+            for (int i = 0; i < topLangs.size(); i++) {
+                Document d = topLangs.get(i);
+                String lang = d.getString("_id");
+                int pc = d.getInteger("projectCount", 0);
+                int ts = d.getInteger("totalStars", 0);
+                Number avg = d.get("avgStars") instanceof Number ? (Number) d.get("avgStars") : null;
+
+                double pct = projectsWithLanguage > 0 ? (pc * 100.0 / projectsWithLanguage) : 0;
+                long avgLong = avg != null ? avg.longValue() : 0;
+
+                sb.append(String.format("%d. %s —— 项目数 %d (占比 %.1f%%)，Star 总数 %d，平均 Star %d\n",
+                        i + 1, lang, pc, pct, ts, avgLong));
+
+                // 该语言下 top 项目
+                List<Document> topProjects = new ArrayList<>();
+                try {
+                    for (Document pdoc : col.find(new Document("language", lang))
+                            .sort(new Document("stars_count", -1))
+                            .limit(topProjectsPerLanguage)
+                            .projection(new Document("full_name", 1).append("name", 1)
+                                    .append("stars_count", 1).append("description", 1))) {
+                        topProjects.add(pdoc);
+                    }
+                } catch (Exception ignored) {
+                }
+
+                for (int j = 0; j < topProjects.size(); j++) {
+                    Document p = topProjects.get(j);
+                    String fullName = p.getString("full_name");
+                    Integer sc = p.get("stars_count") instanceof Number ? ((Number) p.get("stars_count")).intValue() : null;
+                    String desc = p.getString("description");
+                    sb.append(String.format("   - 项目 %d: %s (Star %s) —— %s\n",
+                            j + 1,
+                            fullName != null ? fullName : "未知",
+                            sc != null ? sc.toString() : "未统计",
+                            desc != null && !desc.isBlank() ? desc.length() > 80 ? desc.substring(0, 80) + "..." : desc : "无描述"));
+                }
+                sb.append("\n");
+            }
+
+            // 其他语言
+            if (otherProjects > 0) {
+                sb.append(String.format("其他语言（共 %d 种）—— 项目数 %d，Star 总数 %d\n",
+                        langStats.size() - topN, otherProjects, otherStars));
+            }
+
+            sb.append("\n【总体 Top 项目】\n");
+            try {
+                int rank = 1;
+                for (Document doc : col.find().sort(new Document("stars_count", -1)).limit(10)
+                        .projection(new Document("full_name", 1).append("language", 1)
+                                .append("stars_count", 1).append("description", 1))) {
+                    String fn = doc.getString("full_name");
+                    String lang = doc.getString("language");
+                    Integer sc = doc.get("stars_count") instanceof Number ? ((Number) doc.get("stars_count")).intValue() : null;
+                    String desc = doc.getString("description");
+                    sb.append(String.format("  %d. %s (语言: %s, Star: %s) —— %s\n",
+                            rank++,
+                            fn != null ? fn : "未知",
+                            lang != null && !lang.isBlank() ? lang : "未标注",
+                            sc != null ? sc.toString() : "未统计",
+                            desc != null && !desc.isBlank() ? desc.length() > 80 ? desc.substring(0, 80) + "..." : desc : "无描述"));
+                }
+            } catch (Exception ignored) {
+            }
+
+            return sb.toString();
+        } catch (Exception e) {
+            log.error("[VectorSearch] 生成语言分布报告失败: {}", e.getMessage(), e);
+            return "（生成语言分布报告时出错: " + e.getMessage() + "）";
+        }
+    }
+
     private static String truncate(String s, int n) {
         if (s == null) return "";
         return s.length() <= n ? s : s.substring(0, n) + "...";

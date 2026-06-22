@@ -121,7 +121,7 @@ public class TigerRagController {
         try {
             Map<String, Object> info = new LinkedHashMap<>();
             info.put("name", "Tiger-RAG");
-            info.put("description", "基于 MongoDB Atlas 向量检索 + 豆包大模型的 GitHub 项目智能问答系统");
+            info.put("description", "基于 MongoDB Atlas 向量检索 + 大语言模型的 GitHub 项目智能问答系统");
             info.put("vectorCollection", "projects");
             info.put("vectorIndex", "tiger_projects_vector_index");
             info.put("embeddingModel", embeddingService.getModelName());

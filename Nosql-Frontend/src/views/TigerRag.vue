@@ -29,9 +29,6 @@
         <el-tag size="small" type="success" effect="plain" round>
           MongoDB Atlas · 向量检索
         </el-tag>
-        <el-tag size="small" type="info" effect="plain" round>
-          豆包大模型
-        </el-tag>
       </div>
     </div>
 
@@ -57,7 +54,7 @@
             </div>
             <h2>欢迎使用 Tiger-RAG 智能助手</h2>
             <p class="welcome-sub">
-              基于 MongoDB Atlas 向量数据库 (projects 集合) + 豆包大模型，<br/>
+              基于 MongoDB Atlas 向量数据库 (projects 集合) + 大语言模型，<br/>
               可回答关于 GitHub 项目、编程语言、技术栈的各种问题。
             </p>
             <div class="welcome-suggestions">
@@ -124,7 +121,8 @@
 
               <div v-if="msg.role === 'assistant' && msg.durationMs" class="msg-meta">
                 耗时 {{ msg.durationMs }} ms ·
-                <span v-if="msg.knowledgeSource === 'structured'">精确查询 (数据库)</span>
+                <span v-if="msg.knowledgeSource === 'report'">项目库统计报告（按语言聚合统计）</span>
+                <span v-else-if="msg.knowledgeSource === 'structured'">精确查询 (数据库)</span>
                 <span v-else-if="msg.knowledgeSource === 'rag'">项目知识库 (最高相似度 {{ msg.highestScore && msg.highestScore.toFixed(2) }})</span>
                 <span v-else-if="msg.knowledgeSource === 'hybrid'">混合模式 (最高相似度 {{ msg.highestScore && msg.highestScore.toFixed(2) }}, 已结合通用知识)</span>
                 <span v-else-if="msg.knowledgeSource === 'llm'">通用知识 (LLM)</span>
@@ -709,6 +707,14 @@ function renderMarkdown(text) {
 .tip {
   font-size: 12px;
   color: #909399;
+}
+
+/* 用户输入框文字颜色改为白色 */
+.input-inner :deep(.el-textarea__inner) {
+  color: #fff;
+}
+.input-inner :deep(.el-textarea__inner::placeholder) {
+  color: rgba(255, 255, 255, 0.5);
 }
 
 /* ===== 滚动条美化 ===== */
