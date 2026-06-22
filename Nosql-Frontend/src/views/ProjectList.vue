@@ -104,7 +104,7 @@
         </el-table-column>
         <el-table-column prop="lastPushAt" label="最近推送" width="130">
           <template #default="{ row }">
-            {{ formatDate(row.lastPushAt) }}
+            {{ formatDate(row.lastPushAt || row.updatedAt) }}
           </template>
         </el-table-column>
         <el-table-column label="操作" width="80" fixed="right">

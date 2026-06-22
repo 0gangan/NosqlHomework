@@ -49,7 +49,7 @@
               {{ formatDate(project.createdAt) }}
             </el-descriptions-item>
             <el-descriptions-item label="最近推送">
-              {{ formatDate(project.lastPushAt) }}
+              {{ formatDate(project.lastPushAt || project.updatedAt) }}
             </el-descriptions-item>
           </el-descriptions>
 
