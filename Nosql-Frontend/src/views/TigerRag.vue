@@ -1,168 +1,164 @@
-<template>
-  <div class="tiger-rag">
-    <!-- 左侧：会话列表 + 顶部操作 -->
-    <div class="sidebar">
-      <div class="sidebar-header">
-        <div class="brand" @click="newChat">
-          <el-icon :size="22"><MagicStick /></el-icon>
-          <span class="brand-text">Tiger-RAG</span>
-        </div>
-        <el-button type="primary" plain @click="newChat" :icon="Plus" size="small">
-          新建对话
-        </el-button>
-      </div>
-
-      <div class="session-list">
-        <div
-          v-for="session in sessions"
-          :key="session.id"
-          class="session-item"
-          :class="{ active: currentSessionId === session.id }"
-          @click="switchSession(session.id)"
-        >
-          <el-icon><ChatDotRound /></el-icon>
-          <span class="session-title">{{ session.title }}</span>
-        </div>
-      </div>
-
-      <div class="sidebar-footer">
-        <el-tag size="small" type="success" effect="plain" round>
-          MongoDB Atlas · 向量检索
-        </el-tag>
-        <el-tag size="small" type="info" effect="plain" round>
-          豆包大模型
-        </el-tag>
-      </div>
+﻿<template>
+  <div class="tiger-rag-page">
+    <div class="page-header">
+      <h2>Tiger-RAG 智能问答</h2>
+      <p>基于 MongoDB Atlas 向量检索 + 大模型的 GitHub 项目智能问答系统</p>
     </div>
 
-    <!-- 右侧：聊天主区域 -->
-    <div class="chat-main">
-      <!-- 欢迎屏 -->
-      <div class="chat-header">
-        <span>
-        <el-icon :size="18" color="#409eff"><MagicStick /></el-icon>
-        <span class="chat-title">{{ currentSessionTitle }}</span>
-        </span>
-        <el-button link type="danger" size="small" @click="clearCurrentSession" v-if="messages.length > 0">
-          <el-icon><Delete /></el-icon>清空对话
-        </el-button>
-      </div>
-
-      <!-- 消息列表 -->
-      <div class="messages-wrap" ref="messagesRef">
-        <div v-if="messages.length === 0" class="welcome-screen">
-          <div class="welcome-hero">
-            <div class="welcome-icon">
-              <el-icon :size="56" color="#409eff"><MagicStick /></el-icon>
+    <div class="chat-row">
+      <!-- 左侧：会话列表 -->
+      <div class="chat-col-left">
+        <el-card shadow="never" class="session-card">
+          <template #header>
+            <div class="card-header-row">
+              <span class="section-title">会话列表</span>
+              <el-button type="primary" size="small" :icon="Plus" @click="newChat">新建</el-button>
             </div>
-            <h2>欢迎使用 Tiger-RAG 智能助手</h2>
-            <p class="welcome-sub">
-              基于 MongoDB Atlas 向量数据库 (projects 集合) + 豆包大模型，<br/>
-              可回答关于 GitHub 项目、编程语言、技术栈的各种问题。
-            </p>
-            <div class="welcome-suggestions">
-              <el-card
-                v-for="q in suggestions"
-                :key="q"
-                shadow="hover"
-                class="suggestion-card"
-                @click="handleSuggestion(q)"
-              >
-                <el-icon><Promotion /></el-icon>
-                <span>{{ q }}</span>
-              </el-card>
-            </div>
-          </div>
-        </div>
-
-        <div v-else class="messages">
-          <div
-            v-for="(msg, idx) in messages"
-            :key="idx"
-            class="message-row"
-            :class="msg.role"
-          >
-            <div class="avatar">
-              <span v-if="msg.role === 'user'" class="avatar-inner user">U</span>
-              <span v-else class="avatar-inner assistant">
-                <el-icon :size="16"><MagicStick /></el-icon>
-              </span>
-            </div>
-
-            <div class="bubble-wrap">
-              <div class="bubble">
-                <!-- 回答中 -->
-                <div v-if="msg.content" class="bubble-content">
-                  <p v-if="msg.role === 'assistant'" v-html="renderMarkdown(msg.content)" />
-                  <p v-else>{{ msg.content }}</p>
-                </div>
-                <div v-else class="loading-dots">
-                  <span /><span /><span />
-                </div>
-              </div>
-
-              <!-- 引用项目 -->
-              <div v-if="msg.role === 'assistant' && msg.refs && msg.refs.length" class="refs">
-                <div class="refs-title">
-                  <el-icon :size="12"><Document /></el-icon>
-                  <span>参考项目 ({{ msg.refs.length }})</span>
-                </div>
-                <div class="ref-chips">
-                  <el-tag
-                    v-for="r in msg.refs"
-                    :key="r.docId"
-                    class="ref-chip"
-                    effect="plain"
-                    :type="scoreToTagType(r.score)"
-                    size="small"
-                  >
-                    <span class="ref-title">{{ r.title || '(无标题)' }}</span>
-                    <span class="ref-score" v-if="r.score">{{ (r.score * 100).toFixed(0) }}%</span>
-                  </el-tag>
-                </div>
-              </div>
-
-              <div v-if="msg.role === 'assistant' && msg.durationMs" class="msg-meta">
-                耗时 {{ msg.durationMs }} ms ·
-                <span v-if="msg.knowledgeSource === 'structured'">精确查询 (数据库)</span>
-                <span v-else-if="msg.knowledgeSource === 'rag'">项目知识库 (最高相似度 {{ msg.highestScore && msg.highestScore.toFixed(2) }})</span>
-                <span v-else-if="msg.knowledgeSource === 'hybrid'">混合模式 (最高相似度 {{ msg.highestScore && msg.highestScore.toFixed(2) }}, 已结合通用知识)</span>
-                <span v-else-if="msg.knowledgeSource === 'llm'">通用知识 (LLM)</span>
-                <span v-else>{{ msg.usedKnowledge === false ? '未命中知识库' : '已检索知识库' }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 底部输入区 -->
-      <div class="input-area">
-        <div class="input-inner">
-          <el-input
-            v-model="inputText"
-            type="textarea"
-            :rows="2"
-            :disabled="sending"
-            placeholder="向 Tiger-RAG 提问... (Enter 发送, Shift+Enter 换行)"
-            resize="none"
-            @keydown="handleKey"
-          />
-          <div class="input-actions">
-            <span class="tip">支持 Markdown</span>
-            <el-button
-              type="primary"
-              :loading="sending"
-              :disabled="!inputText.trim()"
-              :icon="Promotion"
-              @click="sendMessage"
+          </template>
+          <div class="session-list">
+            <div
+              v-for="session in sessions"
+              :key="session.id"
+              class="session-item"
+              :class="{ active: currentSessionId === session.id }"
+              @click="switchSession(session.id)"
             >
-              发送
-            </el-button>
+              <el-icon><ChatDotRound /></el-icon>
+              <span class="session-title">{{ session.title }}</span>
+              <el-button
+                v-if="currentSessionId === session.id && messages.length > 0"
+                link
+                type="danger"
+                size="small"
+                class="clear-btn"
+                @click.stop="clearCurrentSession"
+              >
+                <el-icon><Delete /></el-icon>
+              </el-button>
+            </div>
+            <el-empty v-if="sessions.length === 0" description="暂无会话" :image-size="60" />
           </div>
-        </div>
-        <div class="input-footer">
-          <el-icon><InfoFilled /></el-icon>
-          <span>Tiger-RAG 的回答由大语言模型生成，不能完全准确，请自行甄别关键信息。</span>
+        </el-card>
+      </div>
+
+      <!-- 右侧：聊天主区域 -->
+      <div class="chat-col-right">
+        <div class="chat-panel">
+          <!-- 欢迎屏 -->
+          <div v-if="messages.length === 0" class="welcome-screen">
+            <div class="welcome-hero">
+              <div class="welcome-icon">
+                <el-icon :size="56" color="#f7931e"><MagicStick /></el-icon>
+              </div>
+              <h2>欢迎使用 Tiger-RAG 智能助手</h2>
+              <p class="welcome-sub">
+                基于 MongoDB Atlas 向量数据库 (projects 集合) + 大模型，<br/>
+                可回答关于 GitHub 项目、编程语言、技术栈的各种问题。
+              </p>
+              <div class="welcome-suggestions">
+                <div
+                  v-for="q in suggestions"
+                  :key="q"
+                  class="suggestion-card"
+                  @click="handleSuggestion(q)"
+                >
+                  <el-icon><Promotion /></el-icon>
+                  <span>{{ q }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 消息列表 -->
+          <div v-else class="messages-wrap" ref="messagesRef">
+            <div class="messages">
+              <div
+                v-for="(msg, idx) in messages"
+                :key="idx"
+                class="message-row"
+                :class="msg.role"
+              >
+                <div class="avatar">
+                  <span v-if="msg.role === 'user'" class="avatar-inner user">U</span>
+                  <span v-else class="avatar-inner assistant">
+                    <el-icon :size="16"><MagicStick /></el-icon>
+                  </span>
+                </div>
+
+                <div class="bubble-wrap">
+                  <div class="bubble">
+                    <div v-if="msg.content" class="bubble-content">
+                      <p v-if="msg.role === 'assistant'" v-html="renderMarkdown(msg.content)" />
+                      <p v-else>{{ msg.content }}</p>
+                    </div>
+                    <div v-else class="loading-dots">
+                      <span /><span /><span />
+                    </div>
+                  </div>
+
+                  <!-- 引用项目 -->
+                  <div v-if="msg.role === 'assistant' && msg.refs && msg.refs.length" class="refs">
+                    <div class="refs-title">
+                      <el-icon :size="12"><Document /></el-icon>
+                      <span>参考项目 ({{ msg.refs.length }})</span>
+                    </div>
+                    <div class="ref-chips">
+                      <el-tag
+                        v-for="r in msg.refs"
+                        :key="r.docId"
+                        class="ref-chip"
+                        :type="scoreToTagType(r.score)"
+                        size="small"
+                      >
+                        <span class="ref-title">{{ r.title || '(无标题)' }}</span>
+                        <span class="ref-score" v-if="r.score">{{ (r.score * 100).toFixed(0) }}%</span>
+                      </el-tag>
+                    </div>
+                  </div>
+
+                  <div v-if="msg.role === 'assistant' && msg.durationMs" class="msg-meta">
+                    耗时 {{ msg.durationMs }} ms ·
+                    <span v-if="msg.knowledgeSource === 'structured'">精确查询 (数据库)</span>
+                    <span v-else-if="msg.knowledgeSource === 'rag'">项目知识库 (最高相似度 {{ msg.highestScore && msg.highestScore.toFixed(2) }})</span>
+                    <span v-else-if="msg.knowledgeSource === 'hybrid'">混合模式 (最高相似度 {{ msg.highestScore && msg.highestScore.toFixed(2) }}, 已结合通用知识)</span>
+                    <span v-else-if="msg.knowledgeSource === 'llm'">通用知识 (LLM)</span>
+                    <span v-else>{{ msg.usedKnowledge === false ? '未命中知识库' : '已检索知识库' }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 底部输入区 -->
+          <div class="input-area">
+            <div class="input-inner">
+              <el-input
+                v-model="inputText"
+                type="textarea"
+                :rows="2"
+                :disabled="sending"
+                placeholder="向 Tiger-RAG 提问... (Enter 发送, Shift+Enter 换行)"
+                resize="none"
+                @keydown="handleKey"
+              />
+              <div class="input-actions">
+                <span class="tip">支持 Markdown</span>
+                <el-button
+                  type="primary"
+                  :loading="sending"
+                  :disabled="!inputText.trim()"
+                  :icon="Promotion"
+                  @click="sendMessage"
+                >
+                  发送
+                </el-button>
+              </div>
+            </div>
+            <div class="input-footer">
+              <el-icon><InfoFilled /></el-icon>
+              <span>Tiger-RAG 的回答由大语言模型生成，不能完全准确，请自行甄别关键信息。</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -395,43 +391,70 @@ function renderMarkdown(text) {
 </script>
 
 <style scoped>
-.tiger-rag {
+.tiger-rag-page {
   display: flex;
+  flex-direction: column;
   height: calc(100vh - 140px);
-  min-height: 600px;
-  background: #f5f7fa;
-  border-radius: 10px;
+}
+.chat-row {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 20px;
+}
+.chat-col-left {
+  width: 20%;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+  min-height: 0;
+}
+.chat-col-right {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.page-header {
+  margin-bottom: 16px;
+}
+.page-header h2 {
+  font-size: 22px;
+  color: #e0e0e0;
+  margin: 0;
+}
+.page-header p {
+  color: #a0a0b8;
+  margin-top: 4px;
+  font-size: 13px;
 }
 
-/* ============ 侧栏 ============ */
-.sidebar {
-  width: 240px;
-  background: #fff;
-  border-right: 1px solid #ebeef5;
+/* ============ 会话列表 ============ */
+.session-card {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
-.sidebar-header {
-  padding: 16px;
-  border-bottom: 1px solid #ebeef5;
+.session-card :deep(.el-card__body) {
+  flex: 1 0 0;
+  overflow: hidden;
+  padding: 0;
+  min-height: 0;
 }
-.brand {
+.card-header-row {
   display: flex;
+  justify-content: space-between;
   align-items: center;
-  gap: 8px;
-  font-size: 18px;
-  font-weight: 700;
-  color: #409eff;
-  cursor: pointer;
-  margin-bottom: 12px;
 }
-.brand-text {
-  letter-spacing: 1px;
+.section-title {
+  font-weight: 600;
+  font-size: 15px;
 }
 .session-list {
-  flex: 1;
+  height: 100%;
   overflow-y: auto;
   padding: 8px;
 }
@@ -440,211 +463,189 @@ function renderMarkdown(text) {
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  border-radius: 8px;
-  color: #606266;
+  border-radius: 6px;
+  color: #c0c0d0;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
   transition: background 0.15s;
   margin-bottom: 4px;
 }
-.session-item:hover { background: #f0f7ff; }
+.session-item:hover { background: #2a2a4a; }
 .session-item.active {
-  background: #ecf5ff;
-  color: #409eff;
+  background: rgba(247, 147, 30, 0.12);
+  color: #f7931e;
   font-weight: 500;
 }
-.sidebar-footer {
-  padding: 12px;
+.session-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.clear-btn {
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+.clear-btn:hover { opacity: 1; }
+
+/* ============ 聊天面板 ============ */
+.chat-panel {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  border-top: 1px solid #ebeef5;
-}
-.sidebar-footer .el-tag {
-  text-align: center;
-}
-
-/* ============ 聊天主区 ============ */
-.chat-main {
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  background: #fff;
-}
-.chat-header {
-  padding: 14px 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid #f0f0f0;
-  font-weight: 600;
-  color: #303133;
-}
-.chat-header span {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.chat-title { font-size: 15px; }
-
-.messages-wrap {
-  flex: 1;
-  overflow-y: auto;
-  padding: 24px 24px 0;
+  min-height: 0;
+  background: #1e1e36;
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  overflow: hidden;
 }
 
 /* 欢迎屏 */
 .welcome-screen {
+  flex: 1;
   display: flex;
   justify-content: center;
   align-items: center;
-  min-height: 400px;
+  padding: 40px;
 }
-.welcome-hero { text-align: center; max-width: 720px; }
+.welcome-hero { text-align: center; }
 .welcome-icon {
-  width: 84px;
-  height: 84px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #667eea, #764ba2);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0 auto 16px;
-  color: #fff;
+  margin-bottom: 20px;
 }
-.welcome-icon :deep(.el-icon) { color: #fff; }
-.welcome-hero h2 {
+.welcome-screen h2 {
   font-size: 22px;
-  color: #303133;
-  margin-bottom: 8px;
+  color: #e0e0e0;
+  margin: 0 0 12px;
 }
 .welcome-sub {
-  color: #909399;
+  color: #a0a0b8;
   font-size: 14px;
   line-height: 1.7;
-  margin-bottom: 32px;
+  margin-bottom: 28px;
 }
 .welcome-suggestions {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  max-width: 640px;
+  margin: 0 auto;
 }
 .suggestion-card {
-  cursor: pointer;
-  transition: transform 0.15s;
-  text-align: left;
-}
-.suggestion-card :deep(.el-card__body) {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
-  color: #606266;
+  padding: 10px 18px;
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  background: #1e1e36;
+  cursor: pointer;
+  color: #c0c0d0;
+  font-size: 13px;
+  transition: all 0.2s;
 }
 .suggestion-card:hover {
-  transform: translateY(-2px);
-  border-color: #409eff;
+  border-color: #f7931e;
+  color: #f7931e;
+  box-shadow: 0 2px 8px rgba(247,147,30,0.15);
 }
 
-/* 消息气泡 */
+/* 消息列表 */
+.messages-wrap {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+}
 .messages {
-  max-width: 900px;
-  margin: 0 auto;
-  padding-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 .message-row {
   display: flex;
   gap: 12px;
-  margin-bottom: 24px;
 }
-.message-row.user {
-  flex-direction: row-reverse;
-}
-.avatar {
-  width: 36px;
-  height: 36px;
-  flex-shrink: 0;
-}
+.message-row.user { flex-direction: row-reverse; }
+.avatar { flex-shrink: 0; }
 .avatar-inner {
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 700;
   font-size: 14px;
-  color: #fff;
+  font-weight: 700;
 }
 .avatar-inner.user {
-  background: linear-gradient(135deg, #36d1dc, #5b86e5);
+  background: #f7931e;
+  color: #fff;
 }
 .avatar-inner.assistant {
-  background: linear-gradient(135deg, #667eea, #764ba2);
+  background: rgba(247, 147, 30, 0.15);
+  color: #f7931e;
 }
 .bubble-wrap {
   max-width: 75%;
-  min-width: 40%;
+  min-width: 0;
 }
 .bubble {
   padding: 12px 16px;
   border-radius: 12px;
-  line-height: 1.7;
   font-size: 14px;
-  word-wrap: break-word;
-}
-.message-row.assistant .bubble {
-  background: #f7f9fc;
-  border: 1px solid #ebeef5;
-  color: #303133;
-  border-top-left-radius: 4px;
+  line-height: 1.7;
 }
 .message-row.user .bubble {
-  background: linear-gradient(135deg, #409eff, #337ecc);
+  background: #f7931e;
   color: #fff;
-  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
 }
-.bubble-content :deep(strong) {
-  font-weight: 700;
+.message-row.assistant .bubble {
+  background: #1e1e36;
+  color: #e0e0e0;
+  border: 1px solid #2a2a4a;
+  border-bottom-left-radius: 4px;
 }
-.bubble-content :deep(p) {
-  margin: 0;
+.bubble-content :deep(strong) { color: #f7931e; }
+.bubble-content :deep(code) {
+  background: #2a2a4a;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 13px;
 }
-
-/* 正在输入... */
 .loading-dots {
-  display: inline-flex;
-  gap: 4px;
-  padding: 4px 0;
+  display: flex;
+  gap: 6px;
+  padding: 8px 0;
 }
 .loading-dots span {
-  width: 6px;
-  height: 6px;
-  background: #c0c4cc;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  animation: bounce 1.2s infinite ease-in-out both;
+  background: #a0a0b8;
+  animation: dot-bounce 1.2s infinite;
 }
-.loading-dots span:nth-child(2) { animation-delay: 0.15s; }
-.loading-dots span:nth-child(3) { animation-delay: 0.3s; }
-@keyframes bounce {
-  0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
-  40% { transform: scale(1); opacity: 1; }
+.loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+.loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes dot-bounce {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
 }
 
-/* 引用 */
+/* 引用项目 */
 .refs {
   margin-top: 10px;
   padding: 10px 12px;
-  background: #fafafa;
+  background: rgba(42, 42, 74, 0.4);
   border-radius: 8px;
-  border: 1px dashed #ebeef5;
+  border: 1px dashed #2a2a4a;
 }
 .refs-title {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: #909399;
+  color: #a0a0b8;
   margin-bottom: 6px;
 }
 .ref-chips {
@@ -652,77 +653,55 @@ function renderMarkdown(text) {
   flex-wrap: wrap;
   gap: 6px;
 }
-.ref-chip {
-  max-width: 100%;
-  display: flex !important;
-  align-items: center;
-  gap: 6px;
-}
-.ref-chip :deep(.el-tag__content) {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.ref-title {
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.ref-chip { cursor: default; }
 .ref-score {
-  color: #909399;
-  font-size: 11px;
+  margin-left: 6px;
+  font-weight: 600;
 }
-
 .msg-meta {
-  font-size: 12px;
-  color: #c0c4cc;
-  margin-top: 4px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: #a0a0b8;
 }
 
 /* 输入区 */
 .input-area {
-  border-top: 1px solid #ebeef5;
-  background: #fafbfc;
-  padding: 16px 24px 12px;
+  flex-shrink: 0;
+  padding: 12px 20px 16px;
+  border-top: 1px solid #2a2a4a;
+  background: #1a1a2e;
 }
 .input-inner {
-  max-width: 900px;
-  margin: 0 auto;
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+}
+.input-inner :deep(.el-textarea__inner) {
+  background: #1e1e36;
+  border-color: #2a2a4a;
+  color: #e0e0e0;
+}
+.input-inner :deep(.el-textarea__inner:focus) {
+  border-color: #f7931e;
 }
 .input-actions {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 8px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.tip {
+  font-size: 11px;
+  color: #606070;
 }
 .input-footer {
-  max-width: 900px;
-  margin: 6px auto 0;
-  font-size: 12px;
-  color: #c0c4cc;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-}
-
-.tip {
-  font-size: 12px;
-  color: #909399;
-}
-
-/* ===== 滚动条美化 ===== */
-.messages-wrap::-webkit-scrollbar,
-.session-list::-webkit-scrollbar {
-  width: 6px;
-}
-.messages-wrap::-webkit-scrollbar-thumb,
-.session-list::-webkit-scrollbar-thumb {
-  background: #dcdfe6;
-  border-radius: 3px;
-}
-.messages-wrap::-webkit-scrollbar-track,
-.session-list::-webkit-scrollbar-track {
-  background: transparent;
+  margin-top: 8px;
+  font-size: 11px;
+  color: #606070;
 }
 </style>
