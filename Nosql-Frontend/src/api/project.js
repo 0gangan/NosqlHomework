@@ -25,6 +25,11 @@ export function getProjectContributors(id) {
   return api.get(`/projects/${id}/contributors`)
 }
 
+// 按需拉取贡献者 (进入详情页时自动调用)
+export function fetchProjectContributors(id) {
+  return api.post(`/projects/${id}/fetch-contributors`)
+}
+
 // 创建项目
 export function createProject(data) {
   return api.post('/projects', data)

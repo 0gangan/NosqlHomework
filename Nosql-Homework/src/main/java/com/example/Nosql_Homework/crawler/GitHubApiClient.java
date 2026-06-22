@@ -122,7 +122,7 @@ public class GitHubApiClient {
      */
     public List<Map<String, Object>> listContributors(String owner, String repo, int page) {
         return fetchList(
-                "https://api.github.com/repos/" + owner + "/" + repo + "/contributors?per_page=100&page=" + page,
+                "https://api.github.com/repos/" + owner + "/" + repo + "/contributors?per_page=20&page=" + page,
                 page, "contributors");
     }
 

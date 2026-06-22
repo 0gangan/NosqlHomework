@@ -68,6 +68,16 @@ public class ProjectController {
         return R.ok(Map.of("projectId", id, "fetched", count));
     }
 
+    /**
+     * 按需拉取 contributor 列表 (进入项目详情时自动调用)
+     * POST /api/projects/{id}/fetch-contributors
+     */
+    @PostMapping("/{id}/fetch-contributors")
+    public R<Map<String, Object>> fetchContributors(@PathVariable String id) {
+        int count = crawlerService.fetchContributorsOnDemand(id);
+        return R.ok(Map.of("projectId", id, "fetched", count));
+    }
+
     /** 语言分布统计 */
     @GetMapping("/language-stats")
     public R<List<Map<String, Object>>> languageStats() {

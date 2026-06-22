@@ -79,7 +79,7 @@
             <span v-else class="text-muted">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="品类" width="100" align="center">
+        <el-table-column label="分类" width="100" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.category" size="small" type="success">{{ categoryLabel(row.category) }}</el-tag>
             <span v-else class="text-muted">-</span>

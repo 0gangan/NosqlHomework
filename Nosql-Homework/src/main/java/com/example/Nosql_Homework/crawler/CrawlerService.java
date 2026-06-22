@@ -151,6 +151,40 @@ public class CrawlerService {
     }
 
     /**
+     * 按需拉取项目的 contributors 并入库 (用户进入项目详情时自动调用)
+     * @return 拉取的 contributor 条数
+     */
+    public int fetchContributorsOnDemand(String projectId) {
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new IllegalArgumentException("项目不存在: " + projectId));
+
+        String fullName = project.getFullName();
+        if (fullName == null || !fullName.contains("/")) {
+            throw new IllegalArgumentException("项目 fullName 格式异常: " + fullName);
+        }
+
+        // 已有 contributor 数据则跳过
+        if (contributorCrawler.hasContributors(projectId)) {
+            log.info("[按需拉取] contributors 已存在，跳过: {}", fullName);
+            return 0;
+        }
+
+        String[] parts = fullName.split("/");
+        String owner = parts[0];
+        String repo = parts[1];
+
+        log.info("[按需拉取] 开始拉取 contributors: {}/{}", owner, repo);
+        int saved = contributorCrawler.fetchAndSaveContributors(owner, repo, projectId, 1);
+
+        List<Contributor> contribs = contributorCrawler.listByProject(projectId);
+        project.setContributorsCount(contribs.size());
+        projectRepository.save(project);
+
+        log.info("[按需拉取] 完成: {}/{}, 共拉取 {} 条 contributors", owner, repo, saved);
+        return saved;
+    }
+
+    /**
      * 批量回填: 遍历所有项目, 对缺少 contributors 的项目从 GitHub API 补齐
      * (commits 不再回填, 改为按需拉取)
      */

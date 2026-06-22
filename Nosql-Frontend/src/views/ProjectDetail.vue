@@ -37,28 +37,13 @@
               <span v-else>-</span>
             </el-descriptions-item>
             <el-descriptions-item label="分类">
-              {{ project.category || '-' }}
+              {{ categoryLabel(project.category) }}
             </el-descriptions-item>
             <el-descriptions-item label="许可证">
               {{ project.license || '-' }}
             </el-descriptions-item>
             <el-descriptions-item label="默认分支">
               {{ project.defaultBranch || '-' }}
-            </el-descriptions-item>
-            <el-descriptions-item label="质量评分">
-              <el-rate
-                v-model="qualityRate"
-                disabled
-                show-score
-                text-color="#ff9900"
-              />
-            </el-descriptions-item>
-            <el-descriptions-item label="长期价值">
-              <el-progress
-                :percentage="ltvPercent"
-                :stroke-width="16"
-                :color="ltvColor"
-              />
             </el-descriptions-item>
             <el-descriptions-item label="创建时间">
               {{ formatDate(project.createdAt) }}
@@ -135,7 +120,7 @@
 
       <!-- 右侧：贡献者 -->
       <el-col :span="8">
-        <el-card shadow="never">
+        <el-card shadow="never" v-loading="contributorsLoading">
           <template #header><span class="section-title">贡献者 ({{ contributors.length }})</span></template>
           <div class="contributors-list" v-if="contributors.length">
             <div
@@ -175,7 +160,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { getProject, getProjectCommits, getProjectContributors, fetchProjectCommits } from '../api/project'
+import { getProject, getProjectCommits, getProjectContributors, fetchProjectCommits, fetchProjectContributors } from '../api/project'
 import { ElMessage } from 'element-plus'
 
 const route = useRoute()
@@ -187,6 +172,7 @@ const commitTotal = ref(0)
 const commitPage = reactive({ page: 1, size: 20 })
 const fetchingCommits = ref(false)
 const commitsLoaded = ref(false)
+const contributorsLoading = ref(false)
 
 const statItems = [
   { key: 'starsCount', label: 'Star' },
@@ -195,22 +181,27 @@ const statItems = [
   { key: 'openIssuesCount', label: 'Open Issues' }
 ]
 
-const qualityRate = computed(() => {
-  const score = project.value?.qualityScore || 0
-  return Math.min(5, Math.round(score / 20))
-})
+const categoryMap = {
+  ai: 'AI / 机器学习',
+  web: 'Web 开发',
+  mobile: '移动开发',
+  desktop: '桌面应用',
+  framework: '框架',
+  library: '库 / SDK',
+  cli: '命令行 CLI',
+  api: 'API 服务',
+  database: '数据库',
+  devops: 'DevOps',
+  security: '安全',
+  game: '游戏',
+  tool: '开发工具',
+  data: '数据 / 分析'
+}
 
-const ltvPercent = computed(() => {
-  const score = project.value?.longTermValue || 0
-  return Math.min(100, Math.round(score))
-})
-
-const ltvColor = computed(() => {
-  const p = ltvPercent.value
-  if (p >= 80) return '#67c23a'
-  if (p >= 60) return '#e6a23c'
-  return '#f56c6c'
-})
+function categoryLabel(value) {
+  if (!value) return '-'
+  return categoryMap[value] || value
+}
 
 function formatNumber(n) {
   if (!n) return '0'
@@ -260,19 +251,38 @@ async function doFetchCommits() {
 onMounted(async () => {
   try {
     const id = route.params.id
-    const [proj, contribData] = await Promise.all([
-      getProject(id),
-      getProjectContributors(id)
-    ])
-    project.value = proj
-    contributors.value = Array.isArray(contribData) ? contribData : (contribData.records || [])
-    // 不自动加载 commits, 等用户点击按钮
+    // 先加载项目主体，不阻塞页面渲染
+    project.value = await getProject(id)
   } catch (e) {
     console.error('加载项目详情失败:', e)
   } finally {
     loading.value = false
   }
+
+  // 贡献者异步加载，不阻塞其他组件
+  loadContributors()
 })
+
+async function loadContributors() {
+  const id = route.params.id
+  contributorsLoading.value = true
+  try {
+    const data = await getProjectContributors(id)
+    const list = Array.isArray(data) ? data : (data.records || [])
+    if (list.length > 0) {
+      contributors.value = list
+      return
+    }
+    // 无数据则自动拉取
+    await fetchProjectContributors(id)
+    const refreshed = await getProjectContributors(id)
+    contributors.value = Array.isArray(refreshed) ? refreshed : (refreshed.records || [])
+  } catch (e) {
+    console.error('加载贡献者失败:', e)
+  } finally {
+    contributorsLoading.value = false
+  }
+}
 </script>
 
 <style scoped>
