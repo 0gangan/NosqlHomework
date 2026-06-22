@@ -142,7 +142,6 @@
                 @keydown="handleKey"
               />
               <div class="input-actions">
-                <span class="tip">支持 Markdown</span>
                 <el-button
                   type="primary"
                   :loading="sending"
