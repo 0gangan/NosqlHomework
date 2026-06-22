@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -23,6 +24,12 @@ public class SemanticSearchServiceImpl implements SemanticSearchService {
 
     private final OpenAiChatModel chatModel;
     private final ProjectRepository projectRepository;
+
+    /** 后端分类枚举，LLM 返回的 category 必须在此集合中，否则丢弃 */
+    private static final Set<String> VALID_CATEGORIES = Set.of(
+            "ai", "web", "mobile", "desktop", "framework", "library",
+            "cli", "api", "database", "devops", "security", "game", "tool", "data"
+    );
 
     @Override
     public SearchResponse search(SearchRequest request) {
@@ -85,7 +92,12 @@ public class SemanticSearchServiceImpl implements SemanticSearchService {
         sb.append("你是一个 GitHub 项目检索助手。请将用户的自然语言查询解析为 JSON 格式，提取以下字段：\n");
         sb.append("- intent: 查询意图 (code_search / trend_analysis / similar_project / project_search)\n");
         sb.append("- language: 编程语言 (如 Java, Python, JavaScript, Go 等，未提及则为 null)\n");
-        sb.append("- category: 软件品类 (如 web, mobile, desktop, tool, ai 等，未提及则为 null)\n");
+        sb.append("- category: 软件品类，必须从以下列表中选一个（未提及则为 null）:\n");
+        sb.append("    ai=AI/机器学习, web=Web开发, mobile=移动开发, desktop=桌面应用,\n");
+        sb.append("    framework=框架, library=库/SDK, cli=命令行CLI, api=API服务,\n");
+        sb.append("    database=数据库, devops=DevOps, security=安全, game=游戏,\n");
+        sb.append("    tool=开发工具, data=数据/分析\n");
+        sb.append("    注意：category字段只返回小写英文值，如\"ai\"、\"web\"，不要返回中文\n");
         sb.append("- keywords: 搜索关键词 (提取核心技术名词，用空格分隔)\n");
         sb.append("\n");
         sb.append("用户查询: ").append(query).append("\n");
@@ -127,9 +139,20 @@ public class SemanticSearchServiceImpl implements SemanticSearchService {
         ParsedIntent parsed = new ParsedIntent();
         parsed.intent = extractJsonField(response, "intent");
         parsed.language = extractJsonField(response, "language");
-        parsed.category = extractJsonField(response, "category");
+        parsed.category = validateCategory(extractJsonField(response, "category"));
         parsed.keywords = extractJsonField(response, "keywords");
         return parsed;
+    }
+
+    /** 校验 LLM 返回的分类值是否在后端分类枚举中，不在则丢弃 */
+    private String validateCategory(String category) {
+        if (category == null) return null;
+        String lower = category.toLowerCase().trim();
+        if (VALID_CATEGORIES.contains(lower)) {
+            return lower;
+        }
+        log.warn("[LLM] 分类值 \"{}\" 不在有效分类列表中，已丢弃", category);
+        return null;
     }
 
     private String extractJsonField(String json, String field) {
